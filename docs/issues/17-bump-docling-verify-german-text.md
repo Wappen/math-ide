@@ -39,46 +39,51 @@ Related: **#3**, **#4**.
 
 ## Verification outcome
 
-**Status: INCONCLUSIVE in this environment — live re-conversion was not performed.**
+**Status: FAIL — verified live with `docling 2.107.0`; decomposed diaeresis persists.**
 
 The `docling` lower bound in `requirements-ingest.txt` was bumped from `>=2.0.0`
-to `>=2.7.0` (kept as a lower bound, not a hard pin). However, the verification
-that this issue requires — re-converting `example.pdf` and inspecting the
-exported `text` / `orig` strings — **could not be run** in the offline dev
-environment:
+to `>=2.7.0` (kept as a lower bound, not a hard pin). The verification this issue
+requires — re-converting `example.pdf` and inspecting the exported `text` /
+`orig` strings — was **run live** with `docling 2.107.0` installed in `.venv`
+(well above the `>=2.7.0` floor), and the upstream fix **failed**:
 
-- `docling` is **not installed** in the project virtualenv (and per project
-  constraints it stays uninstalled so the offline test suite runs without the
-  heavy SDK), so no conversion could be executed.
-- `example.pdf` is **absent** (it is gitignored), so there was no input PDF to
-  convert and inspect.
+- Docling **still emits decomposed diaeresis** (`¨` plus an optional space plus a
+  vowel) in both `text` and `orig`. The following tokens survive the 2.107.0
+  conversion in the raw export: `Einf¨ uhrung`, `f¨ ur`, `Injektivit¨ at`,
+  `pr¨ azise`, `w¨ ahrend`, `ausdr¨ uckt`, `h¨ ochstens`, `ann¨ ahern`.
+- The adapter `normalize_text` (**#18**) repairs them downstream: the resulting
+  MathDocument shows `Einführung`, `für`, `Injektivität`, `präzise`, `während`,
+  `ausdrückt`, `höchstens`, `annähern`. Concretely, the Docling `orig`
+  `"Testskript: Einf¨ uhrung in die Analysis"` becomes the MathDocument `title`
+  `"Testskript: Einführung in die Analysis"`, and Docling `Injektivit¨ at`
+  becomes the Definition `defined_name` `"Injektivität"`.
 
-Because the umlaut quality of the bumped Docling could not be observed here, the
-upstream fix is **unverified**. Per this issue's gate ("If verification fails:
-note the failure in this issue and proceed with #18"), the inconclusive result
-is treated as not-passing, and the deterministic adapter-side fallback (**#18**)
-**proceeds**.
+Because the bumped Docling still produces decomposed umlauts, the upstream fix is
+**confirmed broken at 2.107.0**. This issue's gate ("If verification fails: note
+the failure in this issue and proceed with #18") is now satisfied by an
+**observed failure**, not an inconclusive result, so the deterministic
+adapter-side repair (**#18**) **proceeds and carries the fix**.
 
-### Reconciliation with #18 (defense-in-depth)
+### Reconciliation with #18 (confirmed load-bearing)
 
-These two paths do not conflict. The #18 `normalize_text()` repair targets only
-the specific decomposed-diaeresis patterns (`¨ a` → `ä`, etc.) and is a **no-op
-on already-correct text**: applied to a string that already contains proper
-`ä`/`ö`/`ü`/`ß`, it changes nothing. Therefore, if a later re-conversion on real
-hardware with the bumped Docling turns out to fix umlauts upstream, the #18
-fallback remains **harmless** — it simply finds no decomposed patterns to
-repair. Keeping both is defense-in-depth: the adapter stays robust whether or
-not a given PDF / Docling version emits clean umlauts.
+These two paths do not conflict, and the live run confirms which one does the
+work. The #18 `normalize_text()` repair targets only the specific
+decomposed-diaeresis patterns (`¨ a` → `ä`, etc.) and is a no-op on
+already-correct text. With Docling 2.107.0 still emitting decomposed umlauts,
+**#18 is load-bearing**: without it the formal-block `defined_name` and concept
+names would slug from `Injektivit¨ at` rather than `Injektivität`. The repair is
+also self-limiting — if a future Docling version ever emits clean umlauts
+upstream, #18 finds no decomposed patterns and changes nothing, so keeping both
+stays safe. As verified here, the adapter fix is required, not redundant.
 
 ### Recommended follow-up
 
-Re-run this verification on **real hardware** with `docling>=2.7.0` installed:
+The live verification has been performed (`docling 2.107.0`, `example.pdf`); the
+FAIL outcome is recorded above. The remaining follow-ups are tracked separately:
 
-1. Install the ingest extras and obtain `example.pdf`.
-2. Re-convert it through the normal Docling pipeline.
-3. Inspect both `text` and `orig` on prose nodes and formal-block labels for
-   `ä`/`ö`/`ü`/`ß` (e.g. `für`, `Injektivität`, `annähern`) rather than `¨` +
-   space + vowel.
-4. If umlauts are clean, record the verified version here and note that #18 is
-   now redundant-but-harmless; if still decomposed, #18 carries the fix as
-   designed.
+1. Re-check on future Docling versions if/when an upstream umlaut fix lands; if
+   umlauts ever become clean upstream, #18 becomes redundant-but-harmless and
+   this section can be revisited.
+2. Residual non-umlaut mojibake (typographic quotes flattened to `'`,
+   blackboard-bold `ℝ`/`ℕ` flattened to `R`/`N`, space-separated inline math) is
+   out of scope for `normalize_text` — see **#25** for the full live-run record.

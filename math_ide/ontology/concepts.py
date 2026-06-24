@@ -10,7 +10,13 @@ Occurrences are then wired to concepts:
 
 * each ``defined_name`` occurrence becomes its concept's *defining occurrence*;
 * each ``formula_symbol`` occurrence links to its token's stub concept;
-* each ``citation`` occurrence links to the seeded concept of the block it cites.
+* each ``citation`` occurrence links to the seeded concept of the block it cites;
+* each ``inline_symbol`` occurrence (#23) links to the SAME stub concept as the
+  matching formula token (folded through :func:`meaning._normalize_symbol_token`,
+  so a prose ``L`` / ``f`` shares the formula ``L`` / ``f`` concept); an inline
+  token with no formula stub but worth surfacing — a prose-only named set or
+  identifier such as ``R`` / ``ℝ`` / ``Y`` — seeds its own pending stub the same
+  way a formula symbol does, so go-to-definition / the concept card work from it.
 
 Finally we lay down deterministic **structural** relations (``origin="structural"``):
 
@@ -44,6 +50,7 @@ from math_ide.schema import (
     FormalBlock,
     MathDocument,
     Occurrence,
+    Paragraph,
     Relation,
 )
 
@@ -183,6 +190,7 @@ def seed_concepts_and_relations(doc: MathDocument) -> MathDocument:
     defined_name_occ: dict[str, Occurrence] = {}  # block_id -> occurrence
     formula_symbol_occ: dict[str, list[Occurrence]] = {}  # block_id -> occ list
     citation_occ: list[Occurrence] = []
+    inline_occ: list[Occurrence] = []
     for occ in doc.occurrences:
         if occ.kind == "defined_name":
             defined_name_occ[occ.block_id] = occ
@@ -190,6 +198,8 @@ def seed_concepts_and_relations(doc: MathDocument) -> MathDocument:
             formula_symbol_occ.setdefault(occ.block_id, []).append(occ)
         elif occ.kind == "citation":
             citation_occ.append(occ)
+        elif occ.kind == "inline_symbol":
+            inline_occ.append(occ)
 
     relations: list[Relation] = []
     rel_seen: set[tuple[str, str, str]] = set()
@@ -260,6 +270,17 @@ def seed_concepts_and_relations(doc: MathDocument) -> MathDocument:
             continue
         occ.concept_id = block_concept_id.get(occ.target_block_id)
 
+    # --- 3b. inline-symbol occurrences (#23) -> shared stub concept --------
+    # A prose ``L`` / ``f`` must corefer to the SAME stub the formula ``L`` /
+    # ``f`` got, so go-to-definition reaches the same place. We match through
+    # the normalisation fold (#21) the resolver already uses, so the prose's
+    # bare ``L`` lands on the formula stub whether the formula spelled it
+    # ``L`` or ``\mathbb{L}`` etc. A prose token with no formula stub — a
+    # named set or identifier that lives only in prose (e.g. ``R`` / ``ℝ`` /
+    # ``Y``) — seeds its own pending stub so it is still navigable.
+    if inline_occ:
+        _link_inline_occurrences(doc, inline_occ)
+
     # --- 4. structural relations: sibling + co_occurring -------------------
     relations.extend(_sibling_relations(doc.concepts, rel_seen))
     relations.extend(_co_occurring_relations(formula_concept_ids, rel_seen))
@@ -279,3 +300,96 @@ def _occurrence_token(formula: Formula, occ: Occurrence) -> Optional[str]:
         return None
     start, end = occ.span
     return formula.canonical_content[start:end]
+
+
+# ---------------------------------------------------------------------------
+# Inline-symbol concept linking (#23)
+# ---------------------------------------------------------------------------
+
+
+def _block_prose(block: object, field: str | None) -> Optional[str]:
+    """The prose string an inline occurrence's span indexes into.
+
+    Inline occurrences are emitted from a :class:`~math_ide.schema.Paragraph`
+    ``text`` or a :class:`~math_ide.schema.FormalBlock` ``body`` / ``preamble``.
+    The occurrence id encodes which field, but rather than parse it we recover the
+    string from the block by trying each prose field; the span always indexes one
+    of them.
+    """
+    if isinstance(block, Paragraph):
+        return block.text
+    if isinstance(block, FormalBlock):
+        if field == "preamble":
+            return block.preamble
+        return block.body
+    return None
+
+
+def _inline_occurrence_token(block: object, occ: Occurrence) -> Optional[str]:
+    """The surface token an inline-symbol occurrence points at.
+
+    Reads it from the host block's prose via the occurrence span. Tries ``body``
+    then ``preamble`` for a formal block (the span fits exactly one).
+    """
+    if occ.span is None:
+        return None
+    start, end = occ.span
+    for field in ("body", "preamble", None):
+        text = _block_prose(block, field)
+        if text is not None and 0 <= start < end <= len(text):
+            return text[start:end]
+    return None
+
+
+def _link_inline_occurrences(
+    doc: MathDocument, inline_occ: list[Occurrence]
+) -> None:
+    """Link each inline-symbol occurrence to a (possibly new) stub concept.
+
+    Reuses the formula-symbol stub whose normalised token matches the inline
+    token (so prose ``L`` shares the formula ``L`` concept), preferring a bare
+    (non-set-markup) stub over a set-markup one when several share the fold key —
+    mirroring the resolver's ``_match_symbol_concept`` (#20/#21). An inline token
+    with no matching stub seeds a fresh pending stub named with its surface form,
+    so it is navigable like any formula symbol.
+    """
+    from math_ide.ontology.meaning import (  # lazy: avoids an import cycle
+        _is_set_markup,
+        _normalize_symbol_token,
+    )
+
+    block_by_id = {b.id: b for b in iter_blocks(doc.blocks)}
+
+    # Index existing stub concepts by normalised token, preferring a bare stub
+    # over a set-markup one when several fold to the same key (e.g. the bare
+    # threshold ``N`` over the set ``\mathbb { N }``), as the resolver does.
+    by_key: dict[str, Concept] = {}
+    for concept in doc.concepts:
+        if concept.formal_meaning is not None:
+            continue  # only stub (non-authoritative) concepts are reusable here
+        key = _normalize_symbol_token(concept.name)
+        current = by_key.get(key)
+        if current is None:
+            by_key[key] = concept
+        elif _is_set_markup(current.name) and not _is_set_markup(concept.name):
+            by_key[key] = concept  # bare stub beats the set-markup one
+
+    for occ in inline_occ:
+        block = block_by_id.get(occ.block_id)
+        token = _inline_occurrence_token(block, occ)
+        if not token:
+            continue
+        key = _normalize_symbol_token(token)
+        concept = by_key.get(key)
+        if concept is None:
+            # No formula/inline stub for this token yet: seed a pending stub
+            # the same way a formula symbol does.
+            concept = Concept(
+                id=doc.mint("concept", stub_key(token)),
+                name=token,
+                formal_meaning=None,
+                resolution_status="pending",
+            )
+            by_key[key] = concept
+            doc.concepts.append(concept)
+        occ.concept_id = concept.id

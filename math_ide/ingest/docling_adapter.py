@@ -60,8 +60,33 @@ __all__ = [
     "subdivide_bbox",
     "source_provenance",
     "blocks_from_docling",
+    "document_metadata_from_docling",
     "normalize_text",
 ]
+
+
+# Docling labels for running page furniture (headers/footers, page numbers).
+# These are never document content and must not become blocks.
+_FURNITURE_LABELS = frozenset({"page_footer", "page_header"})
+
+# A section header that opens with a section number, e.g. "1 Grundbegriffe ..."
+# or "2.3 Foo". The document title is distinguished from real numbered section
+# headers by *not* starting with a digit.
+_NUMBERED_HEADER_RE = re.compile(r"^\s*\d")
+
+
+def _is_furniture(node: dict[str, Any]) -> bool:
+    """True for non-content page furniture (headers/footers, page numbers).
+
+    Matches Docling's ``content_layer == "furniture"`` and the furniture labels
+    ``page_footer`` / ``page_header``. Such nodes are dropped before block
+    construction so a page number like ``"1"`` never becomes a paragraph.
+    """
+    if not isinstance(node, dict):
+        return False
+    if node.get("content_layer") == "furniture":
+        return True
+    return node.get("label") in _FURNITURE_LABELS
 
 
 # ---------------------------------------------------------------------------
@@ -238,11 +263,14 @@ def _normalized_node(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def _iter_body_nodes(docling: dict[str, Any]):
-    """Yield text nodes in reading order, with text/orig normalized.
+    """Yield content text nodes in reading order, with text/orig normalized.
 
     Prefers ``body.children`` ``$ref`` order; falls back to ``texts`` order if
     the body is missing. Each yielded node is a shallow copy whose ``text`` and
-    ``orig`` have been repaired by :func:`normalize_text`.
+    ``orig`` have been repaired by :func:`normalize_text`. Non-content page
+    furniture (``content_layer == "furniture"`` and ``page_footer`` /
+    ``page_header`` nodes — e.g. a bare page-number footer) is filtered out so it
+    never reaches block construction.
     """
     body = docling.get("body") or {}
     children = body.get("children")
@@ -252,11 +280,81 @@ def _iter_body_nodes(docling: dict[str, Any]):
             if not ref:
                 continue
             node = _resolve_ref(docling, ref)
-            if node is not None:
+            if node is not None and not _is_furniture(node):
                 yield _normalized_node(node)
         return
     for node in docling.get("texts", []):
-        yield _normalized_node(node)
+        if not _is_furniture(node):
+            yield _normalized_node(node)
+
+
+def _node_text(node: dict[str, Any]) -> str:
+    """Display text for a node (already normalized by :func:`_normalized_node`)."""
+    return node.get("text") or node.get("orig") or ""
+
+
+def _is_title_header(node: dict[str, Any]) -> bool:
+    """True when ``node`` is a *document-title* heading, not a numbered section.
+
+    A leading ``section_header`` is the document title only when its text does
+    NOT begin with a section number (``^\\s*\\d``). Real numbered headers like
+    ``"1 Grundbegriffe der Mengenlehre"`` therefore stay :class:`Section`
+    blocks, while a bare title such as ``"Testskript: Einführung in die
+    Analysis"`` is recognised as front matter.
+    """
+    if node.get("label") != "section_header":
+        return False
+    return not _NUMBERED_HEADER_RE.match(_node_text(node))
+
+
+def _split_front_matter(
+    nodes: list[dict[str, Any]],
+) -> tuple[Optional[dict[str, str]], int]:
+    """Detect leading document title / subtitle / date front matter.
+
+    Returns ``(metadata, consumed)`` where ``metadata`` is a dict with optional
+    ``title`` / ``subtitle`` / ``date`` keys (or ``None`` when the document does
+    not lead with a title heading) and ``consumed`` is the number of leading
+    ``nodes`` that were absorbed as front matter and must NOT become blocks.
+
+    Heuristic safety: the title is only the *very first* node, must be an
+    un-numbered ``section_header`` (see :func:`_is_title_header`), and is only
+    accepted when it occurs before any numbered section. The immediately
+    following non-``section_header`` ``text`` nodes (at most two) become the
+    subtitle and date. A leading numbered header (the synthetic fixture's
+    ``"1 Mengen und Abbildungen"``) yields no front matter.
+    """
+    if not nodes or not _is_title_header(nodes[0]):
+        return None, 0
+
+    metadata: dict[str, str] = {"title": _node_text(nodes[0])}
+    consumed = 1
+    # Absorb up to two following plain-text nodes as subtitle then date. Stop at
+    # the next section_header (numbered or not) so real content is never eaten.
+    for slot in ("subtitle", "date"):
+        if consumed >= len(nodes):
+            break
+        nxt = nodes[consumed]
+        if nxt.get("label") != "text":
+            break
+        text = _node_text(nxt)
+        if not text:
+            break
+        metadata[slot] = text
+        consumed += 1
+    return metadata, consumed
+
+
+def document_metadata_from_docling(docling: dict[str, Any]) -> dict[str, str]:
+    """Extract document title / subtitle / date front matter from a Docling dict.
+
+    Returns a (possibly empty) dict with optional ``title`` / ``subtitle`` /
+    ``date`` keys. Furniture is filtered first, so a leading page header cannot
+    be mistaken for the title. See :func:`_split_front_matter` for the heuristic.
+    """
+    nodes = list(_iter_body_nodes(docling))
+    metadata, _ = _split_front_matter(nodes)
+    return metadata or {}
 
 
 def _make_section(document_id: str, node: dict[str, Any], index: int) -> Section:
@@ -319,7 +417,16 @@ def blocks_from_docling(
         else:
             roots.append(block)
 
-    for index, node in enumerate(_iter_body_nodes(docling)):
+    nodes = list(_iter_body_nodes(docling))
+    # Leading title/subtitle/date front matter is captured as document metadata
+    # (see document_metadata_from_docling), not emitted as blocks. We keep the
+    # original reading-order index for the surviving nodes so block ids stay
+    # stable regardless of how many front-matter nodes were skipped.
+    _metadata, consumed = _split_front_matter(nodes)
+
+    for index, node in enumerate(nodes):
+        if index < consumed:
+            continue
         label = node.get("label")
         if label == "section_header":
             section = _make_section(document_id, node, index)

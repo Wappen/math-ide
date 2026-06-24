@@ -75,3 +75,43 @@ injectivity formula in place with LaTeX:
 
 Every text and formula node carries `prov` with a page number, a `BOTTOMLEFT`
 bbox, and a `charspan`.
+
+## `example_docling_real.json`
+
+A **captured real** `DocumentConverter(...).convert("example.pdf").document.export_to_dict()`
+from **Docling 2.107.0** (formula enrichment on). Unlike the synthetic fixture
+above — which is idealized, hand-tightened *input* — this is exactly what the
+live model emits for `example.pdf`, so the offline real-shaped tests
+(`test_structure_real.py` #22, `test_resolution_real.py` #21,
+`test_inline_occurrences.py` #23, `test_acceptance_real.py` #24) exercise the
+real code path without paying for a live GPU conversion. The gated
+`test_acceptance_e2e_live.py` re-runs the live conversion and asserts the same
+behaviour, so a drift between this committed snapshot and real Docling output is
+caught (issue #24).
+
+### Divergences it captures (vs. the synthetic fixture)
+
+These are the real-world facts the synthetic fixture's idealized input hides — the
+reason this fixture exists (issues #20–#24):
+
+| aspect              | synthetic (`example_docling.json`)              | real (`example_docling_real.json`)                              |
+| ------------------- | ----------------------------------------------- | --------------------------------------------------------------- |
+| section titles      | `1 Mengen und Abbildungen` / `2 Folgen und Konvergenz` | `1 Grundbegriffe der Mengenlehre` / `2 Folgen und Grenzwerte` (#22) |
+| document title      | absent                                          | a level-1 `section_header` → must become metadata, not a Section (#22) |
+| page furniture      | absent                                          | a `page_footer` `"1"` (page number) → must be dropped (#22)      |
+| citation            | a `Definition 1.1` cross-reference paragraph    | **none** — the real PDF has no numbered cross-reference → 0 citation occs (#24) |
+| definition name     | `Injektivitaet` (ASCII)                         | `Injektivität` (umlaut-repaired, #18)                           |
+| convergence error   | unicode `ε`                                     | LaTeX control word `\epsilon` (#20/#21)                          |
+| subscripts          | tight `a_n` / `x₁`                              | spaced `a _ { n }` / `x _ { 1 }` (#20)                          |
+| convergence domain  | ℝ (`∃ N ∈ ℝ`)                                  | ℕ (`\mathbb { N }`), a set token distinct from the threshold `N` (#20) |
+| inline prose        | minimal                                         | real inline notation (`f : X → Y`, `lim n →∞ a n = L`, `als R`) → `inline_symbol` occs (#23) |
+
+This fixture is **input**, not a `MathDocument`. To regenerate it from the source
+PDF (requires the optional ingest extras / Docling installed):
+
+```python
+import json
+from math_ide.ingest.docling_runner import run_docling
+json.dump(run_docling("example.pdf", formula=True), open(
+    "tests/fixtures/example_docling_real.json", "w"), ensure_ascii=False, indent=2)
+```

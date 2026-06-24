@@ -131,3 +131,86 @@ def test_a_n_subscript_kept_as_single_token():
 def test_unicode_subscript_kept():
     spans = extract_symbol_index("x₁ = x₂")
     assert [s.token for s in spans] == ["x₁", "x₂"]
+
+
+# ---------------------------------------------------------------------------
+# Real Docling 2.107.0 spaced output (issue #20)
+#
+# Live formula enrichment spaces every token in the enriched ``latex``
+# (``x _ { 1 }``, ``a _ { n }``, ``\mathbb { N }``, ``f (``) and linearizes the
+# fallback ``orig`` by dropping ``_`` and keeping only spacing (``a n``), with
+# the lunate epsilon ``ϵ`` U+03F5 instead of ``ε`` U+03B5. These are the exact
+# strings from the E2E log; the synthetic fixture uses tight tokens that mask
+# all of this, so we exercise the spaced forms directly here.
+# ---------------------------------------------------------------------------
+
+INJ_LATEX_SPACED = (
+    r"\forall x _ { 1 } , x _ { 2 } \in X \colon "
+    r"( f ( x _ { 1 } ) = f ( x _ { 2 } ) \implies x _ { 1 } = x _ { 2 } )"
+)
+CONV_LATEX_SPACED = (
+    r"\forall \epsilon > 0 \quad \exists N \in \mathbb { N } "
+    r"\ \forall n \geq N \colon | a _ { n } - L | < \epsilon"
+)
+CONV_ORIG_SPACED = "∀ ϵ > 0 ∃ N ∈ N ∀ n ≥ N : | a n -L | < ϵ"
+
+
+def test_injectivity_latex_spaced_subscripts_are_distinct_whole_tokens():
+    spans = extract_symbol_index(INJ_LATEX_SPACED)
+    tokens = [s.token for s in spans]
+    # x _ { 1 } and x _ { 2 } stay whole and are DISTINCT tokens, not a bare x.
+    assert "x _ { 1 }" in tokens
+    assert "x _ { 2 }" in tokens
+    assert "x" not in tokens
+    # X is a plain variable, f is a function despite the space before "(".
+    by_token = {s.token: s for s in spans}
+    assert by_token["X"].kind == "variable"
+    assert by_token["f"].kind == "function"
+    _assert_offsets_consistent(INJ_LATEX_SPACED)
+
+
+def test_injectivity_latex_spaced_x1_x2_have_separate_offsets():
+    spans = extract_symbol_index(INJ_LATEX_SPACED)
+    x1_starts = sorted(s.start for s in spans if s.token == "x _ { 1 }")
+    x2_starts = sorted(s.start for s in spans if s.token == "x _ { 2 }")
+    # Both subscripts occur multiple times and never share a span -> distinct
+    # formula-symbol occurrences (concept identity is preserved, not collapsed).
+    assert len(x1_starts) >= 2
+    assert len(x2_starts) >= 2
+    assert set(x1_starts).isdisjoint(x2_starts)
+
+
+def test_convergence_latex_spaced_an_set_and_epsilon():
+    spans = extract_symbol_index(CONV_LATEX_SPACED)
+    by_token = {s.token: s for s in spans}
+    tokens = [s.token for s in spans]
+    # a _ { n } is a single variable token, not separate a + n occurrences.
+    assert "a _ { n }" in tokens
+    assert by_token["a _ { n }"].kind == "variable"
+    assert "a" not in tokens
+    # \mathbb { N } is one token, kind=set (not a bare N variable).
+    assert "\\mathbb { N }" in tokens
+    assert by_token["\\mathbb { N }"].kind == "set"
+    # \epsilon is emitted on the LaTeX path.
+    assert "\\epsilon" in tokens
+    _assert_offsets_consistent(CONV_LATEX_SPACED)
+
+
+def test_convergence_orig_spaced_emits_lunate_epsilon_and_an():
+    spans = extract_symbol_index(CONV_ORIG_SPACED)
+    tokens = [s.token for s in spans]
+    # The lunate epsilon ϵ (U+03F5, "GREEK ... SYMBOL") is no longer dropped.
+    assert "ϵ" in tokens
+    assert sum(1 for t in tokens if t == "ϵ") == 2
+    # The despaced subscript "a n" stays one token, not separate a + n.
+    assert "a n" in tokens
+    assert "a" not in tokens
+    assert "L" in tokens
+    assert "N" in tokens
+    _assert_offsets_consistent(CONV_ORIG_SPACED)
+
+
+def test_spaced_function_paren_classified_function():
+    # "f (" with a space before the paren is still a function (issue #20).
+    spans = {s.token: s for s in extract_symbol_index("f ( x )")}
+    assert spans["f"].kind == "function"

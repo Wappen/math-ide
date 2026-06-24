@@ -6,7 +6,7 @@ mathematical notation, each carrying its own *source bbox* (PDF page space,
 estimated by char-span subdivision of the host block's bbox) and a *render
 bbox* placeholder left ``None`` until layout (#11).
 
-Three kinds are produced here (per ``CONTEXT.md``):
+Four kinds are produced here (per ``CONTEXT.md``):
 
 * ``formula_symbol`` — one per :class:`~math_ide.schema.SymbolSpan` in a
   :class:`~math_ide.schema.Formula`'s ``symbol_index``. ``span`` is the symbol's
@@ -19,6 +19,14 @@ Three kinds are produced here (per ``CONTEXT.md``):
   ``Satz 2.3`` ...) found in paragraph prose or a formal block's body/preamble.
   ``target_block_id`` resolves deterministically to the cited formal block by
   matching environment type + number — no LLM.
+* ``inline_symbol`` — one per standalone identifier or named set found *in prose*
+  (a :class:`~math_ide.schema.Paragraph`'s ``text``, or a
+  :class:`~math_ide.schema.FormalBlock`'s ``body``/``preamble``), e.g. the ``L``
+  in "... lim n →∞ a n = L ." or the ``R`` in "... schreiben wir als R .". The
+  match is conservative (#23, Phase 1): only a single Latin letter (optionally
+  subscripted) bounded by non-letters, or a named set, never a letter buried in a
+  German word. ``span`` indexes the host string; the source bbox is the host
+  block bbox subdivided over that span.
 
 The functions are pure and deterministic. :func:`extract_occurrences` mutates
 ``doc.occurrences`` in place and returns the document.
@@ -31,6 +39,10 @@ from typing import Iterable, Iterator, Optional
 
 from math_ide.ingest.docling_adapter import subdivide_bbox
 from math_ide.ingest.formal_blocks import KEYWORD_TO_CLASS
+from math_ide.ingest.symbols import (
+    _UNICODE_SETS,
+    _is_subscript_digit,
+)
 from math_ide.schema import (
     Block,
     Formula,
@@ -44,6 +56,7 @@ __all__ = [
     "extract_occurrences",
     "iter_blocks",
     "reconstruct_label",
+    "scan_inline_symbols",
     "CITATION_RE",
 ]
 
@@ -212,6 +225,151 @@ def _citation_targets(blocks: Iterable[Block]) -> dict[tuple[type, str], str]:
 
 
 # ---------------------------------------------------------------------------
+# Inline-symbol grammar (issue #23, Phase 1)
+# ---------------------------------------------------------------------------
+#
+# Prose carries most of the document's real notation (``f : X → Y``, ``L ∈ R``,
+# ``lim n →∞ a n = L``, ``als R``), but it is interleaved with ordinary German
+# words whose single letters must NEVER match. So we scan conservatively, reusing
+# the very vocabulary the formula symbol scanner already understands
+# (``symbols.py``):
+#
+# * a STANDALONE single Latin letter — bounded on the left by a non-letter and on
+#   the right (after absorbing an optional subscript like ``a_n``) by a
+#   non-letter — is an identifier. The boundary rule is what keeps the ``i`` in
+#   "in", the ``d`` in "der" or the ``E`` in "Eine" from matching: those letters
+#   are followed (or preceded) by another letter, i.e. they are part of a word.
+# * a unicode named set (``ℝ ℕ ℤ ℚ ℂ`` ...) always matches. A bare capital
+#   ``R``/``N``/``Z``/``Q``/``C`` matches only via the standalone-letter rule
+#   above (e.g. "als R ." or "L ∈ R"), so "Reelle" never matches its leading R.
+#
+# We do NOT parse compound expressions (``f : X → Y``, ``( a n ) n ∈ N``) as
+# structures — we only surface the individual identifiers/sets within them.
+# Operators / quantifiers / relations (``∀ ∃ ⇒ → ∈ =`` ...), digits and
+# word-internal letters are skipped.
+
+
+def _is_letter(ch: str) -> bool:
+    """True for any unicode letter (so word boundaries treat umlauts as letters)."""
+    return ch.isalpha()
+
+
+def _consume_tight_subscript(text: str, start: int, head_end: int) -> int:
+    """End offset of a *tight* subscript attached to a single-letter head.
+
+    Conservative, prose-only counterpart to the formula scanner's
+    :func:`symbols._consume_unicode_subscript`: it absorbs **only** an
+    immediately-following ``_``-introduced run (``a_n``, ``x_12``, ``x_{1}``) or a
+    run of unicode subscript digits (``x₁``). It deliberately does NOT fold the
+    formula scanner's *spaced* subscripts (``a n`` -> ``a_n``): in prose a space
+    almost always separates two words, so absorbing the next word's first letter
+    would corrupt the match (``Y höchstens`` must yield just ``Y``).
+    """
+    n = len(text)
+    # unicode subscript digits run: x₁ -> x₁
+    if head_end < n and _is_subscript_digit(text[head_end]):
+        j = head_end
+        while j < n and _is_subscript_digit(text[j]):
+            j += 1
+        return j
+    # ASCII ``_`` subscript: a_n / x_12 / x_{1}
+    if head_end < n and text[head_end] == "_":
+        j = head_end + 1
+        if j < n and text[j] == "{":
+            close = text.find("}", j)
+            if close != -1:
+                return close + 1
+            return head_end  # unbalanced brace: keep the bare head.
+        k = j
+        while k < n and text[k].isascii() and text[k].isalnum():
+            k += 1
+        if k > j:
+            return k
+        return head_end  # ``_`` led nowhere usable: keep the bare head.
+    return head_end
+
+
+def scan_inline_symbols(text: str) -> list[tuple[int, int, str]]:
+    """Find standalone identifier / named-set tokens in a prose string.
+
+    Returns ``(start, end, token)`` triples in left-to-right order, where
+    ``token == text[start:end]``. The match is deliberately conservative
+    (#23, Phase 1): a single Latin letter (optionally subscripted) that is
+    *bounded by non-letters*, or a unicode named set. Anything that is part of a
+    word — a letter with a letter neighbour — is skipped, as are operators,
+    quantifiers, digits and whitespace. Pure, no document state.
+    """
+    out: list[tuple[int, int, str]] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+
+        # unicode named set (ℝ ℕ ...) — always a symbol, regardless of neighbours.
+        if ch in _UNICODE_SETS:
+            out.append((i, i + 1, ch))
+            i += 1
+            continue
+
+        # a letter: either a standalone single-letter identifier or part of a
+        # word. Either way, consume to the end of the maximal letter run so an
+        # interior letter never re-enters the loop and matches spuriously.
+        if _is_letter(ch):
+            j = i + 1
+            while j < n and _is_letter(text[j]):
+                j += 1
+            word_len = j - i
+            if word_len == 1 and ch.isascii():
+                # a STANDALONE single Latin letter (its neighbours are
+                # non-letters): an identifier, optionally tight-subscripted.
+                end = _consume_tight_subscript(text, i, j)
+                out.append((i, end, text[i:end]))
+                i = end
+                continue
+            # a multi-letter word (or a non-ASCII single letter): skip it whole.
+            i = j
+            continue
+
+        # operator / quantifier / digit / whitespace / punctuation: not a symbol.
+        i += 1
+
+    return out
+
+
+def _inline_symbol_occurrences(
+    doc: MathDocument,
+    block: Block,
+    text: str,
+    *,
+    field: str,
+) -> list[Occurrence]:
+    """Inline-symbol occurrences for one prose string belonging to ``block``.
+
+    Mirrors :func:`_citation_occurrences`: the source bbox is the host block bbox
+    subdivided over the matched span; ``render_bbox`` is left ``None`` for layout.
+    """
+    out: list[Occurrence] = []
+    for idx, (start, end, token) in enumerate(scan_inline_symbols(text)):
+        source_bbox = subdivide_bbox(
+            block.source_bbox, (0, len(text)), start, end
+        )
+        occ_id = doc.mint(
+            "occ", f"{block.id}-inline-{field}-{idx}-{token}"
+        )
+        out.append(
+            Occurrence(
+                id=occ_id,
+                kind="inline_symbol",
+                block_id=block.id,
+                span=(start, end),
+                source_bbox=source_bbox,
+                render_bbox=None,
+            )
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -219,9 +377,10 @@ def _citation_targets(blocks: Iterable[Block]) -> dict[tuple[type, str], str]:
 def extract_occurrences(doc: MathDocument) -> MathDocument:
     """Populate ``doc.occurrences`` from the block tree (mutates + returns).
 
-    Produces ``formula_symbol``, ``defined_name`` and ``citation`` occurrences
-    with source bboxes and ``render_bbox=None``. Idempotent re-runs are the
-    caller's concern; this appends to whatever is already there.
+    Produces ``formula_symbol``, ``defined_name``, ``citation`` and
+    ``inline_symbol`` occurrences with source bboxes and ``render_bbox=None``.
+    Idempotent re-runs are the caller's concern; this appends to whatever is
+    already there.
     """
     targets = _citation_targets(doc.blocks)
 
@@ -232,11 +391,17 @@ def extract_occurrences(doc: MathDocument) -> MathDocument:
             occ = _defined_name_occurrence(doc, block)
             if occ is not None:
                 doc.occurrences.append(occ)
-            # citations may appear inside a formal block's body/preamble
+            # citations + inline notation may appear inside a formal block's
+            # body/preamble prose.
             if block.body:
                 doc.occurrences.extend(
                     _citation_occurrences(
                         doc, block, block.body, field="body", targets=targets
+                    )
+                )
+                doc.occurrences.extend(
+                    _inline_symbol_occurrences(
+                        doc, block, block.body, field="body"
                     )
                 )
             if block.preamble:
@@ -249,10 +414,20 @@ def extract_occurrences(doc: MathDocument) -> MathDocument:
                         targets=targets,
                     )
                 )
+                doc.occurrences.extend(
+                    _inline_symbol_occurrences(
+                        doc, block, block.preamble, field="preamble"
+                    )
+                )
         elif isinstance(block, Paragraph):
             doc.occurrences.extend(
                 _citation_occurrences(
                     doc, block, block.text, field="text", targets=targets
+                )
+            )
+            doc.occurrences.extend(
+                _inline_symbol_occurrences(
+                    doc, block, block.text, field="text"
                 )
             )
         # Section carries no notation of its own.

@@ -195,6 +195,9 @@ def test_occurrence_counts_by_kind(doc: MathDocument) -> None:
     assert counts["defined_name"] == 3
     assert counts["citation"] == 1
     assert counts["formula_symbol"] == 17  # 9 (injectivity) + 8 (convergence)
+    # inline_symbol (#23): Def 1.2 body "f: X -> Y" -> f, X, Y; Def 2.1 body
+    # "Folge a_n ... Grenzwert L" -> a_n, L.
+    assert counts["inline_symbol"] == 5
 
 
 def test_occurrence_ids_are_document_namespaced(doc: MathDocument) -> None:

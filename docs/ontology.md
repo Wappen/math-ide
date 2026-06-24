@@ -178,8 +178,8 @@ What a resolve pass does, in order:
 
 ## `MockResolver` (deterministic, offline)
 
-The default, network-free resolver used by the tests. On the canonical fixture
-it encodes the corpus's intended coreference:
+The default, network-free resolver used by the tests. It encodes the corpus's
+intended coreference in a small table:
 
 | Defining concept | Symbol tokens linked to it |
 |------------------|----------------------------|
@@ -192,7 +192,7 @@ For each `(definition, token)` pair where the token has a stub concept,
 - sets the stub's `inferred_meaning`;
 - adds two semantic relations — `stub --uses--> definition` and
   `definition --defines--> stub`;
-- re-points every occurrence of that token at the definition concept;
+- re-points every occurrence of that stub concept at the definition concept;
 - flips the stub `pending -> resolved`.
 
 So the convergence **ε** ends up linked to the **Konvergenz** concept *both*
@@ -201,6 +201,38 @@ the relation `ε-stub --uses--> Konvergenz` exists. Tokens without a stub concep
 in a given document — e.g. `Y`, which appears only in the prose `f: X -> Y` and
 so has no `formula_symbol` occurrence — are skipped silently; `f` and `X` are
 still linked. After a pass, `ingestion_state = "ready"`.
+
+### Normalisation-aware matching (issue #21 — decision: option (a))
+
+The table is authored in **one** canonical spelling, but real Docling output
+spells the same symbols several other ways. The decision (issue #21) is to make
+the mock **normalisation-aware** — option (a), *not* the fixture-only escape
+hatch — so it links the real `example.pdf` tokens offline. Both kinds of table
+key are matched through a fold:
+
+- **Defining-concept names** fold through `_fold_concept_name` — a
+  *non-destructive* casefold plus the `schema.slugify` umlaut/sharp-s map
+  (ä→ae, ö→oe, ü→ue, ß→ss). So the #18 umlaut-repaired name `Injektivität`
+  matches the ASCII table key `Injektivitaet` both ways. (It is **not** the full
+  `slugify`, which would erase the `X`/`x` distinction and unicode like `ε`.)
+- **Symbol tokens** fold through `_normalize_symbol_token`, which **wraps and
+  extends** `pipeline.normalize_token`: it first collapses the internal
+  whitespace LaTeX leaves in spaced subscripts (`a _ { n }` → `a_{n}` → `a_n`,
+  `x _ { 1 }` → `x_1`), then applies `normalize_token` (so `\epsilon`/`ε` → `ε`,
+  `\mathbb{R}`/`ℝ`/`R` → `R`), then folds the `ϵ` (U+03F5) epsilon variant onto
+  `ε` (U+03B5). `_index_concepts_by_name` / `_index_concepts_by_symbol` key the
+  document's concepts by these folds.
+
+The `\mathbb { N }` **set** token and the bare **threshold** `N` both fold to the
+key `N`, but #20 makes them *distinct concepts*. The resolver keys occurrences by
+`concept_id` (not by the shared token key) and, when several concepts share a
+symbol key, prefers the bare non-set-markup stub — so linking the threshold `N`
+to Konvergenz never drags the set `\mathbb { N }` along. The set is left
+**pending**, as is the bound index `n` and the injectivity bound variables
+`x_1` / `x_2` (re-pointing those would collapse every injectivity symbol onto one
+concept and erase the per-stub `co_occurring` structure); finer-grained
+coreference of bound variables is a live-LLM job. The real-fixture acceptance for
+all of this lives in `tests/test_resolution_real.py`.
 
 ## Shared live-resolver machinery
 

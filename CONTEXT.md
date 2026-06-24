@@ -33,7 +33,7 @@ A canonical mathematical object in the ontology — the thing that `f`, `L`, or 
 _Avoid_: Term, entity, token
 
 **Occurrence**:
-A single surface appearance of mathematical notation at a specific document location. Three kinds at import time: a symbol inside a formula, the defined name in a formal block's label, or an explicit numbered citation (e.g. `Definition 1.1`). Each occurrence has its own render bbox and source bbox, and resolves to exactly one concept.
+A single surface appearance of mathematical notation at a specific document location. Four kinds at import time: a symbol inside a formula (`formula_symbol`), the defined name in a formal block's label (`defined_name`), an explicit numbered citation (e.g. `Definition 1.1`) (`citation`), or an `inline_symbol` — a standalone identifier or named set found in prose (a paragraph's text, or a formal block's body/preamble), e.g. the `L` in "… lim n →∞ a n = L ." or the `R` in "… schreiben wir als R .". Each occurrence has its own render bbox and source bbox, and resolves to exactly one concept.
 _Avoid_: Token, mention, site
 
 **Citation occurrence**:

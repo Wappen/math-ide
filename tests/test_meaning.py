@@ -24,6 +24,8 @@ from math_ide.ontology.meaning import (
     DEFAULT_MODEL,
     DEFAULT_OPENAI_MODEL,
     MeaningDelta,
+    _fold_concept_name,
+    _normalize_symbol_token,
     build_prompt,
     parse_response,
 )
@@ -60,6 +62,62 @@ def test_resolve_returns_same_document(seeded: MathDocument) -> None:
 
 def test_anthropic_resolver_defaults_to_sonnet() -> None:
     assert AnthropicResolver().model == DEFAULT_MODEL == "claude-sonnet-4-6"
+
+
+# ---------------------------------------------------------------------------
+# Normalisation-aware matching (issue #21): the folds the MockResolver keys on
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "spelling, key",
+    [
+        # epsilon: LaTeX control word, U+03B5, and the U+03F5 lunate fallback.
+        (r"\epsilon", "ε"),
+        ("ε", "ε"),
+        ("ϵ", "ε"),  # U+03F5 lunate variant folds onto U+03B5
+        # spaced LaTeX subscripts collapse the same as their compact spellings.
+        ("a _ { n }", "a_n"),
+        ("a_{n}", "a_n"),
+        ("a_n", "a_n"),
+        ("x _ { 1 }", "x_1"),
+        ("x_1", "x_1"),
+        ("x₁", "x_1"),
+        ("x _ { 2 }", "x_2"),
+        # the set ℕ and the spaced \mathbb { N } fold onto the same key as a
+        # bare N (the resolver keeps them apart via the concept, not the key).
+        (r"\mathbb { N }", "N"),
+        ("ℕ", "N"),
+        ("N", "N"),
+        # plain letters are untouched and the X/x case distinction survives.
+        ("L", "L"),
+        ("f", "f"),
+        ("X", "X"),
+        ("n", "n"),
+    ],
+)
+def test_normalize_symbol_token_folds_real_spellings(spelling: str, key: str) -> None:
+    assert _normalize_symbol_token(spelling) == key
+
+
+def test_normalize_symbol_token_preserves_case() -> None:
+    """The symbol fold must NOT lowercase: X (domain) and x (element) stay
+    distinct, unlike the destructive slugify used for whole-word names."""
+    assert _normalize_symbol_token("X") != _normalize_symbol_token("x")
+
+
+@pytest.mark.parametrize(
+    "name, key",
+    [
+        ("Injektivität", "injektivitaet"),  # #18 umlaut repair
+        ("Injektivitaet", "injektivitaet"),  # ASCII table key — same fold
+        ("Konvergenz", "konvergenz"),
+        ("Menge", "menge"),
+        ("Größe", "groesse"),  # ö and ß both fold
+    ],
+)
+def test_fold_concept_name_matches_umlaut_and_ascii(name: str, key: str) -> None:
+    assert _fold_concept_name(name) == key
 
 
 # ---------------------------------------------------------------------------
@@ -154,20 +212,33 @@ def test_injectivity_symbols_consistent_with_definition(seeded: MathDocument) ->
     assert x.inferred_meaning
 
 
-def test_codomain_Y_handled_even_without_a_formula_occurrence(
+def test_codomain_Y_surfaced_from_prose_resolves_to_injektivitaet(
     seeded: MathDocument,
 ) -> None:
-    """Y appears only in prose (f: X -> Y), so the seeder makes no Y stub.
+    """Y appears only in prose (``f: X -> Y``), with no formula occurrence.
 
-    The MockResolver must tolerate that: f/X are still linked, and resolution
-    does not crash on the missing Y token.
+    Before #23 it was dead text and got no concept; now the inline scanner
+    surfaces it, the seeder seeds a pending ``Y`` stub, and the MockResolver
+    coreferences it to Injektivitaet (its ``_COREFERENCE`` table already names
+    ``Y``). Resolution still succeeds and never crashes on the token.
     """
     names = {c.name for c in seeded.concepts}
-    assert "Y" not in names  # confirm the corpus shape this test guards
+    assert "Y" in names  # #23: prose Y is now surfaced as its own stub
+    y = _concept_by_name(seeded, "Y")
+    assert y.formal_meaning is None and y.resolution_status == "pending"
+    # The prose Y has at least one inline occurrence linked to the Y stub.
+    y_occs = [o for o in seeded.occurrences if o.concept_id == y.id]
+    assert y_occs and all(o.kind == "inline_symbol" for o in y_occs)
 
-    # Resolution succeeds despite the missing Y token.
     MockResolver().resolve(seeded)
     assert seeded.ingestion_state == "ready"
+
+    # Coreference moves the prose Y onto the Injektivitaet concept.
+    inj = _concept_by_name(seeded, "Injektivitaet")
+    assert all(o.concept_id == inj.id for o in y_occs)
+    # ... and the stub itself is resolved with an inferred meaning.
+    assert y.resolution_status == "resolved"
+    assert y.inferred_meaning
 
 
 # ---------------------------------------------------------------------------

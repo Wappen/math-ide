@@ -178,13 +178,15 @@ _LATEX_GREEK = {
 }
 
 # unicode Greek block (skip the few used as operators? none here) — any letter
-# whose unicode name starts with "GREEK ... LETTER" is an identifier.
+# whose unicode name is "GREEK ... LETTER" *or* "GREEK ... SYMBOL" (the lunate
+# variants ``ϵ`` U+03F5, ``ϑ`` U+03D1, ``ϕ`` U+03D5, ``ϰ``, ``ϱ``, ``ϖ`` ...) is
+# an identifier — Docling linearizes ``\epsilon`` as the lunate ``ϵ`` SYMBOL.
 def _is_unicode_greek(ch: str) -> bool:
     try:
         name = unicodedata.name(ch)
     except ValueError:
         return False
-    return "GREEK" in name and "LETTER" in name
+    return "GREEK" in name and ("LETTER" in name or "SYMBOL" in name)
 
 
 # Operator / structure single chars we never index (unicode + ascii).
@@ -196,6 +198,19 @@ _SKIP_CHARS = set(
     ":,;.…⋯∪∩∖∅"  # punctuation / set ops
     " \t\n\r"
 )
+
+
+def _followed_by_paren(content: str, end: int) -> bool:
+    """True if the next non-whitespace char at/after ``end`` is ``(``.
+
+    Docling emits ``f (`` (a space before the paren), so the function check
+    must tolerate optional whitespace between the letter head and ``(``.
+    """
+    n = len(content)
+    j = end
+    while j < n and content[j] in " \t\n\r":
+        j += 1
+    return j < n and content[j] == "("
 
 
 def _classify_letter(token: str, followed_by_paren: bool) -> SymbolKind:
@@ -229,9 +244,12 @@ def extract_symbol_index(content: str) -> list[SymbolSpan]:
                 word = m.group(1)
                 start = i
                 end = i + m.end()
-                # \mathbb{R} and friends -> named set
+                # \mathbb{R} and friends -> named set. Tolerate whitespace
+                # around the braces (Docling emits "\mathbb { N }").
                 if word in ("mathbb", "mathcal", "mathfrak", "mathscr"):
-                    brace = re.match(r"\\[A-Za-z]+\{([^}]*)\}", content[i:])
+                    brace = re.match(
+                        r"\\[A-Za-z]+\s*\{\s*([^}]*?)\s*\}", content[i:]
+                    )
                     if brace:
                         end = i + brace.end()
                         spans.append(
@@ -277,7 +295,7 @@ def extract_symbol_index(content: str) -> list[SymbolSpan]:
             start = i
             end = i + 1
             token, end = _consume_unicode_subscript(content, start, end)
-            followed = end < n and content[end] == "("
+            followed = _followed_by_paren(content, end)
             spans.append(
                 SymbolSpan(
                     token=token,
@@ -306,30 +324,85 @@ def extract_symbol_index(content: str) -> list[SymbolSpan]:
     return spans
 
 
+_WS = " \t\n\r"
+
+
+def _skip_ws(content: str, j: int) -> int:
+    n = len(content)
+    while j < n and content[j] in _WS:
+        j += 1
+    return j
+
+
 def _consume_unicode_subscript(content: str, start: int, end: int) -> tuple[str, int]:
     """Extend a single-letter token to absorb a trailing subscript.
 
-    Handles both ``x_1`` (ASCII ``_`` + digits/letter) and ``x₁`` (unicode
-    subscript digits). Returns ``(token, new_end)`` where ``token`` is the raw
-    slice ``content[start:new_end]``.
+    Handles the tight forms ``x_1`` (ASCII ``_`` + digits/letter) and ``x₁``
+    (unicode subscript digits) *and* Docling's spaced ``x _ { 1 }`` / ``a _ { n }``
+    (optional whitespace between the head and ``_``, between ``_`` and ``{``,
+    and inside ``{ ... }``). The whole spaced run collapses into one token.
+
+    Returns ``(token, new_end)`` where ``token`` is the raw slice
+    ``content[start:new_end]`` — offsets still index the original string
+    exactly, so the token text may contain the interior spaces.
     """
     n = len(content)
-    j = end
-    if j < n and content[j] == "_":
-        j += 1
+    # Look past optional whitespace for an ASCII ``_`` introducing a subscript.
+    after_ws = _skip_ws(content, end)
+    if after_ws < n and content[after_ws] == "_":
+        j = after_ws + 1
+        j = _skip_ws(content, j)
         if j < n and content[j] == "{":
             close = content.find("}", j)
             if close != -1:
                 j = close + 1
-        else:
-            # single token subscript: a run of word chars (a_n, x_12)
-            while j < n and (content[j].isalnum()):
-                j += 1
-    else:
-        # unicode subscript digits: x₁
-        while j < n and _is_subscript_digit(content[j]):
-            j += 1
+                return content[start:j], j
+            # Unbalanced brace: don't swallow the rest; keep the bare head.
+            return content[start:end], end
+        # single token subscript: a run of word chars (a_n, x_12)
+        k = j
+        while k < n and content[k].isalnum():
+            k += 1
+        if k > j:
+            return content[start:k], k
+        # ``_`` led nowhere usable: keep the bare head.
+        return content[start:end], end
+    # Docling's linearized ``orig`` drops the ``_`` entirely and keeps only the
+    # spacing, so ``a_n`` arrives as ``a n`` and ``x_1`` as ``x 1``. When the
+    # head is followed by whitespace then a lone subscript candidate (a digit
+    # run, or a single letter not continuing into a word), fold it in.
+    if after_ws > end:
+        sub_end = _consume_spaced_subscript_candidate(content, after_ws)
+        if sub_end > after_ws:
+            return content[start:sub_end], sub_end
+    # unicode subscript digits: x₁ (these are always tight, no spacing).
+    j = end
+    while j < n and _is_subscript_digit(content[j]):
+        j += 1
     return content[start:j], j
+
+
+def _consume_spaced_subscript_candidate(content: str, j: int) -> int:
+    """End offset of a spaced subscript candidate at ``j``, else ``j``.
+
+    A candidate is either a run of ASCII digits (``x 12``) or a *single* ASCII
+    letter that does not continue into a multi-letter word (``a n``; but not the
+    ``a`` of ``a bc`` two adjacent words). Anything else is not a subscript.
+    """
+    n = len(content)
+    if j >= n:
+        return j
+    ch = content[j]
+    if ch.isascii() and ch.isdigit():
+        k = j
+        while k < n and content[k].isascii() and content[k].isdigit():
+            k += 1
+        return k
+    if ch.isascii() and ch.isalpha():
+        nxt = j + 1
+        if nxt >= n or not (content[nxt].isascii() and content[nxt].isalpha()):
+            return nxt
+    return j
 
 
 def _consume_latex_subscript(content: str, start: int, end: int) -> tuple[str, int]:

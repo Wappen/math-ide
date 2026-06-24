@@ -1,0 +1,494 @@
+{
+  "schema_name": "DoclingDocument",
+  "version": "1.10.0",
+  "name": "example",
+  "origin": {
+    "mimetype": "application/pdf",
+    "binary_hash": 11714210736799704244,
+    "filename": "example.pdf"
+  },
+  "furniture": {
+    "self_ref": "#/furniture",
+    "children": [],
+    "content_layer": "furniture",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "body": {
+    "self_ref": "#/body",
+    "children": [
+      {
+        "$ref": "#/texts/0"
+      },
+      {
+        "$ref": "#/texts/1"
+      },
+      {
+        "$ref": "#/texts/2"
+      },
+      {
+        "$ref": "#/texts/3"
+      },
+      {
+        "$ref": "#/texts/4"
+      },
+      {
+        "$ref": "#/texts/5"
+      },
+      {
+        "$ref": "#/texts/6"
+      },
+      {
+        "$ref": "#/texts/7"
+      },
+      {
+        "$ref": "#/texts/8"
+      },
+      {
+        "$ref": "#/texts/9"
+      },
+      {
+        "$ref": "#/texts/10"
+      },
+      {
+        "$ref": "#/texts/11"
+      },
+      {
+        "$ref": "#/texts/12"
+      },
+      {
+        "$ref": "#/texts/13"
+      },
+      {
+        "$ref": "#/texts/14"
+      }
+    ],
+    "content_layer": "body",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "groups": [],
+  "texts": [
+    {
+      "self_ref": "#/texts/0",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "section_header",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 139.162,
+            "t": 666.9415021484375,
+            "r": 455.15707000000003,
+            "b": 648.2076903508871,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            40
+          ]
+        }
+      ],
+      "orig": "Testskript: Einf¨ uhrung in die Analysis",
+      "text": "Testskript: Einf¨ uhrung in die Analysis",
+      "level": 1
+    },
+    {
+      "self_ref": "#/texts/1",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 191.76599999999996,
+            "t": 619.9124692484374,
+            "r": 402.54768411999993,
+            "b": 606.8099653798495,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            36
+          ]
+        }
+      ],
+      "orig": "Test-Szenario f¨ ur Docling Pipeline",
+      "text": "Test-Szenario f¨ ur Docling Pipeline"
+    },
+    {
+      "self_ref": "#/texts/2",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 256.08799999999997,
+            "t": 584.8044692484375,
+            "r": 338.2286027199999,
+            "b": 572.2669653798496,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            13
+          ]
+        }
+      ],
+      "orig": "24. Juni 2026",
+      "text": "24. Juni 2026"
+    },
+    {
+      "self_ref": "#/texts/3",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "section_header",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88399999999996,
+            "t": 540.1157790484374,
+            "r": 399.9753224200001,
+            "b": 525.0047260409447,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            31
+          ]
+        }
+      ],
+      "orig": "1 Grundbegriffe der Mengenlehre",
+      "text": "1 Grundbegriffe der Mengenlehre",
+      "level": 1
+    },
+    {
+      "self_ref": "#/texts/4",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88399999999996,
+            "t": 510.18741624843744,
+            "r": 491.42910208000006,
+            "b": 470.37646722711173,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            205
+          ]
+        }
+      ],
+      "orig": "In der Mathematik nutzen wir Quantoren, um Aussagen pr¨ azise zu formulieren. Der Allquantor ∀ steht f¨ ur ' f¨ ur alle', w¨ ahrend der Existenzquantor ∃ ausdr¨ uckt, dass mindestens ein Element existiert.",
+      "text": "In der Mathematik nutzen wir Quantoren, um Aussagen pr¨ azise zu formulieren. Der Allquantor ∀ steht f¨ ur ' f¨ ur alle', w¨ ahrend der Existenzquantor ∃ ausdr¨ uckt, dass mindestens ein Element existiert."
+    },
+    {
+      "self_ref": "#/texts/5",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88399999999996,
+            "t": 459.66228184843743,
+            "r": 491.4312502400003,
+            "b": 420.28746722711173,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            200
+          ]
+        }
+      ],
+      "orig": "Definition 1.1 (Menge): Eine Menge ist eine Zusammenfassung von wohlunterschiedenen Objekten unserer Anschauung oder unseres Denkens zu einem Ganzen. Die Menge der reellen Zahlen schreiben wir als R .",
+      "text": "Definition 1.1 (Menge): Eine Menge ist eine Zusammenfassung von wohlunterschiedenen Objekten unserer Anschauung oder unseres Denkens zu einem Ganzen. Die Menge der reellen Zahlen schreiben wir als R ."
+    },
+    {
+      "self_ref": "#/texts/6",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88399999999996,
+            "t": 409.0664162484374,
+            "r": 491.42762048,
+            "b": 354.80946722711167,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            287
+          ]
+        }
+      ],
+      "orig": "Ein wichtiges Konzept f¨ ur Abbildungen zwischen Mengen ist die Injektivit¨ at. Definition 1.2 (Injektivit¨ at): Eine Abbildung f : X → Y heißt injektiv , wenn jedem Element des Zielbereichs Y h¨ ochstens ein Element des Definitionsbereichs X zugeordnet wird. Mathematisch ausgedr¨ uckt:",
+      "text": "Ein wichtiges Konzept f¨ ur Abbildungen zwischen Mengen ist die Injektivit¨ at. Definition 1.2 (Injektivit¨ at): Eine Abbildung f : X → Y heißt injektiv , wenn jedem Element des Zielbereichs Y h¨ ochstens ein Element des Definitionsbereichs X zugeordnet wird. Mathematisch ausgedr¨ uckt:"
+    },
+    {
+      "self_ref": "#/texts/7",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "formula",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 186.85399999999996,
+            "t": 340.88641624843734,
+            "r": 407.45654016000003,
+            "b": 329.40532273172266,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            57
+          ]
+        }
+      ],
+      "orig": "∀ x 1 , x 2 ∈ X : ( f ( x 1 ) = f ( x 2 ) = ⇒ x 1 = x 2 )",
+      "text": "\\forall x _ { 1 } , x _ { 2 } \\in X \\colon ( f ( x _ { 1 } ) = f ( x _ { 2 } ) \\implies x _ { 1 } = x _ { 2 } )"
+    },
+    {
+      "self_ref": "#/texts/8",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "section_header",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88400000000007,
+            "t": 304.99277904843734,
+            "r": 329.9327459800001,
+            "b": 289.8817260409446,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            23
+          ]
+        }
+      ],
+      "orig": "2 Folgen und Grenzwerte",
+      "text": "2 Folgen und Grenzwerte",
+      "level": 1
+    },
+    {
+      "self_ref": "#/texts/9",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88400000000007,
+            "t": 275.0634162484373,
+            "r": 491.4232179200003,
+            "b": 249.69846722711168,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            144
+          ]
+        }
+      ],
+      "orig": "Wir betrachten nun unendliche Folgen reeller Zahlen. Ein klassisches Beispiel ist die harmonische Folge, deren Glieder sich der Null ann¨ ahern.",
+      "text": "Wir betrachten nun unendliche Folgen reeller Zahlen. Ein klassisches Beispiel ist die harmonische Folge, deren Glieder sich der Null ann¨ ahern."
+    },
+    {
+      "self_ref": "#/texts/10",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88400000000007,
+            "t": 238.98428184843726,
+            "r": 491.43313792000026,
+            "b": 199.60946722711162,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            193
+          ]
+        }
+      ],
+      "orig": "Definition 2.1 (Konvergenz): Eine Folge ( a n ) n ∈ N reeller Zahlen heißt konvergent gegen den Grenzwert L ∈ R , wenn in jeder noch so kleinen ϵ -Umgebung von L fast alle Folgenglieder liegen.",
+      "text": "Definition 2.1 (Konvergenz): Eine Folge ( a n ) n ∈ N reeller Zahlen heißt konvergent gegen den Grenzwert L ∈ R , wenn in jeder noch so kleinen ϵ -Umgebung von L fast alle Folgenglieder liegen."
+    },
+    {
+      "self_ref": "#/texts/11",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88400000000019,
+            "t": 188.38841624843735,
+            "r": 210.74381440000022,
+            "b": 177.94046722711164,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            20
+          ]
+        }
+      ],
+      "orig": "Das bedeutet formal:",
+      "text": "Das bedeutet formal:"
+    },
+    {
+      "self_ref": "#/texts/12",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "formula",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 192.93100000000018,
+            "t": 163.54541624843728,
+            "r": 401.3827120000002,
+            "b": 152.06532273172263,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            40
+          ]
+        }
+      ],
+      "orig": "∀ ϵ > 0 ∃ N ∈ N ∀ n ≥ N : | a n -L | < ϵ",
+      "text": "\\forall \\epsilon > 0 \\quad \\exists N \\in \\mathbb { N } \\ \\forall n \\geq N \\colon | a _ { n } - L | < \\epsilon"
+    },
+    {
+      "self_ref": "#/texts/13",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "body",
+      "label": "text",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 102.88400000000019,
+            "t": 131.47941624843725,
+            "r": 478.08481440000014,
+            "b": 119.9993227317226,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            74
+          ]
+        }
+      ],
+      "orig": "Wenn eine Folge gegen L konvergiert, schreiben wir auch lim n →∞ a n = L .",
+      "text": "Wenn eine Folge gegen L konvergiert, schreiben wir auch lim n →∞ a n = L ."
+    },
+    {
+      "self_ref": "#/texts/14",
+      "parent": {
+        "$ref": "#/body"
+      },
+      "children": [],
+      "content_layer": "furniture",
+      "label": "page_footer",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": {
+            "l": 294.22900000000016,
+            "t": 101.59141624843733,
+            "r": 300.08226592000017,
+            "b": 91.14346722711161,
+            "coord_origin": "BOTTOMLEFT"
+          },
+          "charspan": [
+            0,
+            1
+          ]
+        }
+      ],
+      "orig": "1",
+      "text": "1"
+    }
+  ],
+  "pictures": [],
+  "tables": [],
+  "key_value_items": [],
+  "form_items": [],
+  "pages": {
+    "1": {
+      "size": {
+        "width": 595.2760009765625,
+        "height": 841.8900146484375
+      },
+      "page_no": 1
+    }
+  }
+}

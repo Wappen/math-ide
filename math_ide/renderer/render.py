@@ -43,7 +43,7 @@ Occurrence anchors (hit targets)
   <span class="occ"
         data-occurrence-id="<occ.id>"
         data-concept-id="<occ.concept_id or ''>"
-        data-kind="formula_symbol|defined_name|citation"
+        data-kind="formula_symbol|defined_name|citation|inline_symbol"
         data-target-block-id="<occ.target_block_id>"   (citations only)
         data-resolvable="false"                          (only when no target yet)
         tabindex="0">…surface text…</span>
@@ -51,7 +51,9 @@ Occurrence anchors (hit targets)
   string:
     formula_symbol -> the formula's ``canonical_content``
     defined_name   -> the formal block's header line
-    citation       -> the paragraph's ``text``
+    citation       -> the paragraph's ``text`` (or a formal block's body/preamble)
+    inline_symbol  -> the host prose: a paragraph's ``text`` or a formal block's
+                      ``body`` / ``preamble`` (#23)
   Spans are applied left-to-right; overlapping spans are skipped to keep text
   intact. All surrounding text is HTML-escaped.
   ``data-resolvable="false"`` marks an occurrence whose go-to-definition target
@@ -96,9 +98,11 @@ Embedded navigation payload (the IDE wave depends on this)
 from __future__ import annotations
 
 import json
+from collections import Counter
 from html import escape
 from typing import Iterable, Optional
 
+from math_ide.ontology.occurrences import scan_inline_symbols
 from math_ide.renderer.navigation import build_ide_payload, definition_target
 from math_ide.schema import (
     Block,
@@ -206,6 +210,41 @@ def _occurrences_for(
     ]
 
 
+def _partition_inline_by_field(
+    doc: MathDocument, block_id: str, *fields: Optional[str]
+) -> list[list[Occurrence]]:
+    """Split a block's ``inline_symbol`` occurrences across its prose fields.
+
+    A formal block emits inline occurrences from BOTH its ``body`` and its
+    ``preamble`` under the same ``block_id``, so a span alone is ambiguous. We
+    re-scan each field with the same deterministic scanner the extractor used
+    (:func:`~math_ide.ontology.occurrences.scan_inline_symbols`) to recover the
+    spans that field produced, then walk the block's inline occurrences in
+    document order, assigning each to the FIRST field that still has an
+    unconsumed matching span. Because ``extract_occurrences`` emits body
+    occurrences before preamble ones, passing ``(body, preamble)`` reconstructs
+    the original split exactly — without parsing occurrence ids — so a body span
+    that coincides with a preamble span is never mis-anchored.
+    """
+    remaining = [
+        Counter((s, e) for s, e, _tok in scan_inline_symbols(text)) if text else Counter()
+        for text in fields
+    ]
+    out: list[list[Occurrence]] = [[] for _ in fields]
+    for occ in doc.occurrences:
+        if occ.kind != "inline_symbol" or occ.block_id != block_id:
+            continue
+        if occ.span is None:
+            continue
+        span = (occ.span[0], occ.span[1])
+        for idx, counter in enumerate(remaining):
+            if counter.get(span, 0) > 0:
+                counter[span] -= 1
+                out[idx].append(occ)
+                break
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Block rendering
 # ---------------------------------------------------------------------------
@@ -259,8 +298,11 @@ def _render_paragraph(
     level: int,
     targets: dict[str, Optional[str]],
 ) -> str:
+    # Citations and inline symbols both index into ``para.text``; anchor them
+    # together so they share one left-to-right pass (overlaps are skipped).
     citations = _occurrences_for(doc, para.id, "citation")
-    body = _anchor_text(para.text, citations, targets)
+    inline = _occurrences_for(doc, para.id, "inline_symbol")
+    body = _anchor_text(para.text, citations + inline, targets)
     children = "".join(
         _render_block(child, doc, level, targets) for child in para.children
     )
@@ -348,12 +390,18 @@ def _render_formal(
     header_text = _formal_header(block)
     names = _occurrences_for(doc, block.id, "defined_name")
     header = _anchor_text(header_text, names, targets)
+    # Inline-symbol occurrences live in BOTH the body and the preamble under the
+    # same block id; split them back to their field so each anchors into the
+    # right string (body emitted first — see _partition_inline_by_field).
+    body_inline, preamble_inline = _partition_inline_by_field(
+        doc, block.id, block.body, block.preamble
+    )
     parts = [f'<div class="formal-header">{header}</div>']
     if block.preamble:
-        parts.append(
-            f'<p class="formal-preamble">{escape(block.preamble)}</p>'
-        )
-    parts.append(f'<div class="formal-body">{escape(block.body)}</div>')
+        preamble_html = _anchor_text(block.preamble, preamble_inline, targets)
+        parts.append(f'<p class="formal-preamble">{preamble_html}</p>')
+    body_html = _anchor_text(block.body, body_inline, targets)
+    parts.append(f'<div class="formal-body">{body_html}</div>')
     return (
         f'<div class="block formal {type_class}" '
         f'data-formal-type="{escape(block.type, quote=True)}" '

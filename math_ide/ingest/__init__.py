@@ -21,7 +21,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from math_ide.schema import MathDocument, slugify
-from math_ide.ingest.docling_adapter import blocks_from_docling, source_provenance
+from math_ide.ingest.docling_adapter import (
+    blocks_from_docling,
+    document_metadata_from_docling,
+    source_provenance,
+)
 
 __all__ = ["build_math_document"]
 
@@ -56,9 +60,13 @@ def build_math_document(
     """
     doc_id = document_id or _default_document_id(docling)
     blocks = blocks_from_docling(docling, doc_id)
+    metadata = document_metadata_from_docling(docling)
     return MathDocument(
         document_id=doc_id,
         source=source_provenance(docling),
+        title=metadata.get("title"),
+        subtitle=metadata.get("subtitle"),
+        date=metadata.get("date"),
         blocks=blocks,
         ingestion_state="structure_ready",
     )

@@ -101,14 +101,46 @@ def _effective_resolver_name(resolver: str | None, wait: bool) -> str:
     return resolver or ("auto" if wait else "mock")
 
 
+def _require_sdk(provider: str, module: str) -> None:
+    """Fail fast (exit code 2) if a pinned live resolver's SDK is missing.
+
+    The live resolvers import their provider SDK lazily inside ``_complete``, so
+    a missing package would otherwise surface only as a swallowed retry inside
+    ``resolve_via_completion`` (partial doc, ``ingestion_state="resolving"``,
+    exit 0). When a provider is *explicitly* pinned we instead probe the import
+    up front and, if it is unavailable, write a clear message naming the missing
+    package and ``raise SystemExit(2)`` — mirroring the API-key check. This runs
+    ONLY for the explicitly pinned ``anthropic`` / ``openai`` resolvers, never
+    for ``mock`` / ``auto``, so the lazy-import contract (offline suite, ``auto``
+    fallback with no SDK) stays intact.
+    """
+    import importlib.util
+
+    try:
+        found = importlib.util.find_spec(module) is not None
+    except ModuleNotFoundError:
+        # A ``None`` entry in ``sys.modules`` (a shadowed/blocked import) makes
+        # ``find_spec`` raise; treat that as "not importable" too.
+        found = False
+    if not found:
+        sys.stderr.write(
+            f"error: --resolver {provider} requires the '{module}' package, "
+            f"which is not installed. Install it with: pip install '{module}'.\n"
+        )
+        raise SystemExit(2)
+
+
 def _make_resolver(name: str):
     """Construct the requested resolver, importing live SDKs only on demand.
 
     ``mock`` / ``auto`` never need a key (``auto`` falls back to the mock with a
     stderr warning). ``anthropic`` / ``openai`` **fail fast** (exit code 2) if
-    their API key is absent, before any client is constructed, so an unkeyed
-    request never silently hits the network. The live resolvers import their
-    SDKs lazily inside ``_complete``, so construction here stays offline.
+    their API key is absent OR their provider SDK is not importable, before any
+    client is constructed, so an unkeyed request never silently hits the network
+    and a missing SDK never silently degrades to a partial ``resolving`` doc. The
+    live resolvers import their SDKs lazily inside ``_complete``, so construction
+    here stays offline; the SDK importability probe runs only for the explicitly
+    pinned live resolvers (never ``mock`` / ``auto``).
     """
     if name == "anthropic":
         import os
@@ -119,6 +151,7 @@ def _make_resolver(name: str):
                 "set.\n"
             )
             raise SystemExit(2)
+        _require_sdk("anthropic", "anthropic")
         from math_ide.ontology import AnthropicResolver
 
         return AnthropicResolver()
@@ -130,6 +163,7 @@ def _make_resolver(name: str):
                 "error: --resolver openai requires OPENAI_API_KEY to be set.\n"
             )
             raise SystemExit(2)
+        _require_sdk("openai", "openai")
         from math_ide.ontology import OpenAIResolver
 
         return OpenAIResolver()

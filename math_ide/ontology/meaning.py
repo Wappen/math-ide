@@ -58,6 +58,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol, runtime_checkable
@@ -247,36 +248,170 @@ class MeaningDelta:
 
 
 # ---------------------------------------------------------------------------
+# Normalisation-aware matching (issue #21)
+# ---------------------------------------------------------------------------
+#
+# Real Docling output spells the *same* symbol several ways across enrichment:
+# the convergence error bound arrives as the LaTeX control word ``\epsilon`` (or
+# the unicode ``ε`` / the ``ϵ`` U+03F5 fallback); subscripts arrive *spaced* as
+# ``a _ { n }`` / ``x _ { 1 }`` rather than ``a_n`` / ``x_1``; and the umlaut
+# repair (#18) names the injectivity concept ``Injektivität`` while the mock's
+# table key is the ASCII-folded ``Injektivitaet``. The deterministic
+# :class:`MockResolver` table is authored against ONE canonical spelling, so
+# every key — both the *defining-concept* names and the *per-symbol* tokens — is
+# matched through a fold that collapses these dialects onto a single key.
+#
+# We reuse :func:`pipeline.normalize_token` (which already folds ``\epsilon`` ->
+# ``ε``, ``x_1`` -> ``x_1`` and ``\mathbb{R}`` -> ``R``) and EXTEND it by first
+# collapsing the internal whitespace LaTeX leaves in spaced subscripts, so
+# ``a _ { n }`` -> ``a_{n}`` -> ``a_n`` and ``x _ { 1 }`` -> ``x_1``. We also fold
+# the ``ϵ`` (U+03F5) epsilon variant onto the canonical ``ε`` (U+03B5).
+
+#: ``ϵ`` (GREEK LUNATE EPSILON SYMBOL, U+03F5) -> ``ε`` (GREEK SMALL LETTER
+#: EPSILON, U+03B5). Docling's ``orig`` fallback uses the lunate variant; the
+#: enriched ``\epsilon`` and the table key both canonicalise to U+03B5.
+_LUNATE_EPSILON = "ϵ"
+_SMALL_EPSILON = "ε"
+
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_symbol_token(token: str) -> str:
+    r"""Fold a formula-symbol surface token to a dialect-independent match key.
+
+    Wraps :func:`math_ide.pipeline.normalize_token` with two pre/post passes so
+    the *real* Docling spellings collapse onto the same key as the synthetic
+    fixture's canonical spellings:
+
+    * collapse internal whitespace (``a _ { n }`` -> ``a_{n}``) so the spaced
+      LaTeX subscript folds the same as ``a_n`` / ``a_{n}`` / ``aₙ``;
+    * canonicalise the ``ϵ`` (U+03F5) epsilon variant onto ``ε`` (U+03B5).
+
+    Examples (real spelling -> key)::
+
+        \epsilon / ϵ / ε        -> ε
+        a _ { n } / a_n / a_{n}  -> a_n
+        x _ { 1 } / x_1 / x₁     -> x_1
+        \mathbb { N } / ℕ / N    -> N
+
+    Note the set ``\mathbb { N }`` and the bare threshold ``N`` deliberately
+    share the key ``N`` (that is what ``normalize_token`` does); the resolver
+    keeps them apart by matching *concepts* (which #20 made distinct), not by the
+    shared token key — see :meth:`MockResolver.build_delta`.
+    """
+    # lazy import: pipeline imports math_ide.ontology, so importing it at module
+    # scope would be circular (see __init__). Importing here is cheap and safe.
+    from math_ide.pipeline import normalize_token
+
+    if not token:
+        return token
+    collapsed = _WS_RE.sub("", token)
+    folded = normalize_token(collapsed)
+    return folded.replace(_LUNATE_EPSILON, _SMALL_EPSILON)
+
+
+#: German umlaut / sharp-s folds, matching ``schema.slugify`` semantics (which
+#: the concept *ids* already use), so the same equivalence drives name matching.
+_UMLAUT_FOLD = (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss"))
+
+
+def _fold_concept_name(name: str) -> str:
+    """Fold a defining-concept *name* to a case/umlaut-insensitive match key.
+
+    Applies the same umlaut/sharp-s folds as ``schema.slugify`` (ä->ae, ö->oe,
+    ü->ue, ß->ss) plus a casefold, so the umlaut-repaired name ``Injektivität``
+    matches the ASCII table key ``Injektivitaet`` both ways. Unlike ``slugify``
+    this is *non-destructive* — it keeps every other character — because it is
+    only ever applied to whole-word concept names (``Konvergenz`` / ``Menge`` /
+    ``Injektivität``), never to symbol tokens (those go through
+    :func:`_normalize_symbol_token`, which must preserve unicode like ``ε`` and
+    the ``X`` vs ``x`` distinction ``slugify`` would erase).
+    """
+    folded = name.strip().casefold()
+    for src, dst in _UMLAUT_FOLD:
+        folded = folded.replace(src, dst)
+    return folded
+
+
+def _is_set_markup(name: str) -> bool:
+    """True if a concept name is blackboard/set markup (``\\mathbb{N}`` / ``ℕ``).
+
+    Used to keep the SET token (e.g. the convergence ``\\mathbb { N }``, #20)
+    distinct from a bare-letter threshold (``N``) even though both fold to the
+    same symbol key.
+    """
+    collapsed = _WS_RE.sub("", name)
+    if _MATHBB_NAME_RE.match(collapsed):
+        return True
+    return any(ch in _BLACKBOARD_CODEPOINTS for ch in name)
+
+
+_MATHBB_NAME_RE = re.compile(r"^\\(?:mathbb|mathcal|mathfrak|mathscr)\{")
+#: Single-codepoint blackboard letters (ℝ ℕ ℤ ℚ ℂ 𝔽 ℙ ...).
+_BLACKBOARD_CODEPOINTS = set("ℝℕℤℚℂ𝔽ℙ")
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers for building a delta from a seeded document
 # ---------------------------------------------------------------------------
 
 
-def _index_concepts_by_name(doc: MathDocument) -> dict[str, Concept]:
-    """Map concept ``name`` -> concept (last wins on a name collision)."""
-    return {c.name: c for c in doc.concepts}
+def _index_concepts_by_name(doc: MathDocument) -> dict[str, list[Concept]]:
+    """Map a *folded* concept name -> the concepts that share it (issue #21).
+
+    Keyed by :func:`_fold_concept_name` so the umlaut-repaired ``Injektivität``
+    lands under the same key as the ASCII table name ``Injektivitaet``. The value
+    is a *list* (document order) so a name collision keeps every candidate.
+    """
+    by_name: dict[str, list[Concept]] = {}
+    for concept in doc.concepts:
+        by_name.setdefault(_fold_concept_name(concept.name), []).append(concept)
+    return by_name
 
 
-def _formula_symbol_occurrences_by_token(
+def _index_concepts_by_symbol(doc: MathDocument) -> dict[str, list[Concept]]:
+    """Map a *normalised* symbol token -> the concepts that share it (issue #21).
+
+    Keyed by :func:`_normalize_symbol_token` of the concept's name so the
+    per-symbol stub concepts seeded from the real Docling spellings (``\\epsilon``
+    / ``a _ { n }`` / ``x _ { 1 }``) land under the same key as the table's
+    canonical tokens (``ε`` / ``a_n`` / ``x_1``). The value is a *list* because
+    the symbol fold can give two distinct concepts the same key — the convergence
+    threshold ``N`` and the set ``\\mathbb { N }`` both fold to ``N`` (#20 keeps
+    them as separate concepts); :meth:`MockResolver._match_symbol_concept` picks
+    the right one.
+    """
+    by_symbol: dict[str, list[Concept]] = {}
+    for concept in doc.concepts:
+        by_symbol.setdefault(
+            _normalize_symbol_token(concept.name), []
+        ).append(concept)
+    return by_symbol
+
+
+def _formula_symbol_occurrences_by_concept(
     doc: MathDocument,
 ) -> dict[str, list[Occurrence]]:
-    """Group ``formula_symbol`` occurrences by their surface token.
+    """Group symbol occurrences by the stub ``concept_id`` they point at.
 
-    The token is read from the host formula's ``canonical_content`` via the
-    occurrence span, so it is correct whether the formula is enriched or on its
-    ``orig`` fallback.
+    Stage-1 seeding links every formula-symbol occurrence — and every
+    ``inline_symbol`` occurrence (#23) — to its per-token stub concept, and #20
+    gives the threshold ``N`` and the set ``\\mathbb { N }`` *distinct* stub
+    concepts. Grouping by ``concept_id`` (rather than by the shared,
+    fold-collapsed token) lets the resolver re-point exactly the occurrences of
+    the concept it matched — so linking the threshold ``N`` never drags the set's
+    occurrences along. Inline occurrences ride along with their stub: when the
+    resolver corefers the formula ``L`` stub to Konvergenz, the prose ``L`` that
+    shares that stub follows, so go-to-definition reaches the same block.
     """
-    formulas = {b.id: b for b in iter_blocks(doc.blocks) if isinstance(b, Formula)}
-    by_token: dict[str, list[Occurrence]] = {}
+    by_concept: dict[str, list[Occurrence]] = {}
     for occ in doc.occurrences:
-        if occ.kind != "formula_symbol" or occ.span is None:
+        if occ.kind not in ("formula_symbol", "inline_symbol"):
             continue
-        formula = formulas.get(occ.block_id)
-        if formula is None:
+        if occ.concept_id is None:
             continue
-        start, end = occ.span
-        token = formula.canonical_content[start:end]
-        by_token.setdefault(token, []).append(occ)
-    return by_token
+        by_concept.setdefault(occ.concept_id, []).append(occ)
+    return by_concept
 
 
 # ---------------------------------------------------------------------------
@@ -308,9 +443,15 @@ class MockResolver:
     """
 
     #: For each defining concept name, the symbol tokens that corefer to it and
-    #: the inferred meaning to attach to each symbol's stub concept. Tokens that
-    #: have no stub concept in a given document (e.g. ``Y``, which appears only
-    #: in prose) are skipped without error.
+    #: the inferred meaning to attach to each symbol's stub concept.
+    #:
+    #: Keys are written in ONE canonical spelling; matching is normalisation-aware
+    #: (issue #21), so the concept names fold through :func:`_fold_concept_name`
+    #: (``Injektivitaet`` matches the umlaut-repaired ``Injektivität``) and the
+    #: symbol tokens fold through :func:`_normalize_symbol_token` (``ε`` matches
+    #: ``\epsilon`` / ``ϵ``; ``a_n`` matches the spaced ``a _ { n }``; ``x_1``
+    #: matches ``x _ { 1 }``). Tokens with no stub concept in a given document
+    #: (e.g. ``Y``, which appears only in prose) are skipped without error.
     _COREFERENCE: dict[str, dict[str, str]] = {
         "Konvergenz": {
             "ε": "Positive error bound in the convergence definition; "
@@ -323,6 +464,13 @@ class MockResolver:
             "f": "The mapping whose injectivity is being defined.",
             "X": "Domain of the injective mapping f.",
             "Y": "Codomain of the injective mapping f.",
+            # NOTE: x_1 / x_2 (the tested domain elements) are deliberately left
+            # OUT. They ARE bound by the injectivity definition, but re-pointing
+            # their occurrences at Injektivität collapses every injectivity
+            # formula symbol onto one concept, which erases the per-stub
+            # co_occurring structure other layers rely on (see #21 discussion in
+            # docs/ontology.md). They stay pending — like the convergence bound
+            # index n — until a live LLM does finer-grained coreference.
         },
     }
 
@@ -331,19 +479,27 @@ class MockResolver:
     _SYMBOL_TO_CONCEPT_KIND: RelationKind = "uses"
 
     def build_delta(self, doc: MathDocument) -> MeaningDelta:
-        """Compute the meaning-resolution delta for ``doc`` (pure)."""
+        """Compute the meaning-resolution delta for ``doc`` (pure).
+
+        Matching is normalisation-aware (issue #21): the defining-concept name
+        and every symbol token are looked up through the folds in
+        :func:`_fold_concept_name` / :func:`_normalize_symbol_token`, so the real
+        Docling spellings (``Injektivität``, ``\\epsilon``, ``a _ { n }``) resolve
+        the same as the synthetic fixture's canonical ones.
+        """
         delta = MeaningDelta()
-        concept_by_name = _index_concepts_by_name(doc)
-        occ_by_token = _formula_symbol_occurrences_by_token(doc)
+        concepts_by_name = _index_concepts_by_name(doc)
+        concepts_by_symbol = _index_concepts_by_symbol(doc)
+        occ_by_concept = _formula_symbol_occurrences_by_concept(doc)
 
         for concept_name, symbol_meanings in self._COREFERENCE.items():
-            target = concept_by_name.get(concept_name)
+            target = self._match_defining_concept(concept_name, concepts_by_name)
             if target is None:
                 continue  # this document has no such definition; skip.
             delta.resolved_concepts.add(target.id)
 
             for token, meaning in symbol_meanings.items():
-                stub = concept_by_name.get(token)
+                stub = self._match_symbol_concept(token, concepts_by_symbol)
                 if stub is None:
                     continue  # token has no concept (e.g. prose-only Y).
 
@@ -355,12 +511,55 @@ class MockResolver:
                 # ... and the definition uses the symbol (defines its role).
                 delta.relate(target.id, stub.id, "defines")
 
-                # coreference: re-point every occurrence of this token at the
-                # defined concept so go-to-definition reaches Definition 2.1/1.2.
-                for occ in occ_by_token.get(token, ()):
+                # coreference: re-point every occurrence of this stub concept at
+                # the defined concept so go-to-definition reaches Def 2.1 / 1.2.
+                # Keyed by concept_id (not the fold-collapsed token) so linking
+                # the threshold ``N`` never drags the set ``\mathbb { N }`` along.
+                for occ in occ_by_concept.get(stub.id, ()):
                     delta.link(occ.id, target.id)
 
         return delta
+
+    @staticmethod
+    def _match_defining_concept(
+        name: str, concepts_by_name: dict[str, list[Concept]]
+    ) -> Optional[Concept]:
+        """Find the defining (formal) concept for a table name key.
+
+        Folds ``name`` and prefers a candidate that carries a ``formal_meaning``
+        (the definition block's concept) over any bare stub that happens to fold
+        to the same key.
+        """
+        candidates = concepts_by_name.get(_fold_concept_name(name))
+        if not candidates:
+            return None
+        for concept in candidates:
+            if concept.formal_meaning is not None:
+                return concept
+        return candidates[0]
+
+    @staticmethod
+    def _match_symbol_concept(
+        token: str, concepts_by_symbol: dict[str, list[Concept]]
+    ) -> Optional[Concept]:
+        """Find the stub concept for a table symbol-token key.
+
+        Folds ``token`` to its symbol key, then — among concepts sharing that key
+        — prefers a bare (non-formal, non-set-markup) stub. This keeps the
+        threshold ``N`` distinct from the set ``\\mathbb { N }`` (#20): both fold
+        to key ``N``, but only the bare-letter stub is chosen for the ``N`` link.
+        """
+        candidates = concepts_by_symbol.get(_normalize_symbol_token(token))
+        if not candidates:
+            return None
+        plain = [
+            c
+            for c in candidates
+            if c.formal_meaning is None and not _is_set_markup(c.name)
+        ]
+        if plain:
+            return plain[0]
+        return candidates[0]
 
     def resolve(self, doc: MathDocument) -> MathDocument:
         """Apply the deterministic delta and advance the document to ``ready``."""

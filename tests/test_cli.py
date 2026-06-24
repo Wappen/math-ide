@@ -245,3 +245,131 @@ def test_ingest_resolver_anthropic_fails_fast_without_key(monkeypatch) -> None:
     with pytest.raises(SystemExit) as excinfo:
         ingest_cli.run([str(FIXTURE), "--wait", "--resolver", "anthropic"])
     assert excinfo.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# Fail-fast on a missing provider SDK for an EXPLICITLY pinned live resolver
+# (issue #26). The lazy-import contract is preserved: the importability probe
+# fires only for pinned anthropic/openai, never for mock/auto.
+# ---------------------------------------------------------------------------
+
+
+def _block_sdk(monkeypatch, module: str) -> None:
+    """Make ``import <module>`` fail by shadowing it in ``sys.modules``.
+
+    A ``None`` entry in ``sys.modules`` makes both ``import`` and
+    ``importlib.util.find_spec`` report the module as unavailable, simulating an
+    uninstalled SDK without actually uninstalling it from the test environment.
+    """
+    import sys
+
+    monkeypatch.setitem(sys.modules, module, None)
+
+
+def test_ingest_resolver_openai_fails_fast_when_sdk_missing(monkeypatch) -> None:
+    """--resolver openai with OPENAI_API_KEY set but the openai SDK unimportable
+    fails fast (exit 2) with a message naming the package — instead of building
+    a resolver that degrades into a partial 'resolving' doc."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _block_sdk(monkeypatch, "openai")
+
+    with pytest.raises(SystemExit) as excinfo:
+        ingest_cli._make_resolver("openai")
+    assert excinfo.value.code == 2
+
+
+def test_ingest_resolver_openai_sdk_missing_message_names_package(
+    monkeypatch, capsys
+) -> None:
+    """The missing-SDK fail-fast names the 'openai' package on stderr."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+    _block_sdk(monkeypatch, "openai")
+
+    with pytest.raises(SystemExit):
+        ingest_cli._make_resolver("openai")
+    err = capsys.readouterr().err
+    assert "openai" in err
+    assert "--resolver openai" in err
+
+
+def test_ingest_resolver_anthropic_fails_fast_when_sdk_missing(
+    monkeypatch,
+) -> None:
+    """--resolver anthropic with ANTHROPIC_API_KEY set but the anthropic SDK
+    unimportable fails fast (exit 2) the same way as the openai case."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _block_sdk(monkeypatch, "anthropic")
+
+    with pytest.raises(SystemExit) as excinfo:
+        ingest_cli._make_resolver("anthropic")
+    assert excinfo.value.code == 2
+
+
+def test_ingest_resolver_anthropic_sdk_missing_message_names_package(
+    monkeypatch, capsys
+) -> None:
+    """The missing-SDK fail-fast names the 'anthropic' package on stderr."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake")
+    _block_sdk(monkeypatch, "anthropic")
+
+    with pytest.raises(SystemExit):
+        ingest_cli._make_resolver("anthropic")
+    err = capsys.readouterr().err
+    assert "anthropic" in err
+    assert "--resolver anthropic" in err
+
+
+def test_ingest_resolver_mock_does_not_probe_sdks(monkeypatch) -> None:
+    """mock never triggers the importability probe — even with BOTH SDKs absent
+    it constructs a resolver offline (the lazy-import contract)."""
+    _block_sdk(monkeypatch, "openai")
+    _block_sdk(monkeypatch, "anthropic")
+
+    resolver = ingest_cli._make_resolver("mock")
+    from math_ide.ontology import MockResolver
+
+    assert isinstance(resolver, MockResolver)
+
+
+def test_ingest_resolver_auto_does_not_probe_sdks_without_keys(
+    monkeypatch, capsys
+) -> None:
+    """auto with no keys and both SDKs absent must NOT hard-fail: it falls back
+    to the offline MockResolver (preserving auto's documented semantics)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _block_sdk(monkeypatch, "openai")
+    _block_sdk(monkeypatch, "anthropic")
+
+    resolver = ingest_cli._make_resolver("auto")
+    from math_ide.ontology import MockResolver
+
+    assert isinstance(resolver, MockResolver)
+    assert "MockResolver" in capsys.readouterr().err
+
+
+def test_ingest_resolver_auto_does_not_probe_sdk_with_key(monkeypatch) -> None:
+    """auto with a key set but the SELECTED SDK absent must NOT hard-fail in
+    _make_resolver: auto constructs the live resolver lazily (no SDK probe), so
+    construction stays offline and any failure is deferred to call time."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _block_sdk(monkeypatch, "openai")
+
+    resolver = ingest_cli._make_resolver("auto")
+    from math_ide.ontology import OpenAIResolver
+
+    assert isinstance(resolver, OpenAIResolver)
+
+
+def test_ingest_resolver_openai_constructs_when_sdk_present(monkeypatch) -> None:
+    """With the openai SDK present and a key set, the pinned resolver builds
+    normally (the fail-fast only fires when the SDK truly can't import)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+
+    resolver = ingest_cli._make_resolver("openai")
+    from math_ide.ontology import OpenAIResolver
+
+    assert isinstance(resolver, OpenAIResolver)

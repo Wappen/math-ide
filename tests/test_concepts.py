@@ -91,7 +91,12 @@ def test_stub_concept_per_distinct_symbol_token(doc: MathDocument) -> None:
     stubs = [c for c in doc.concepts if c.formal_meaning is None]
     names = sorted(c.name for c in stubs)
     # injectivity tokens + convergence tokens (note distinct X vs x₁ vs x₂; N vs n)
-    assert names == sorted(["x₁", "x₂", "X", "f", "ε", "N", "ℝ", "n", "a_n", "L"])
+    # plus the prose-only codomain Y, surfaced by the inline scanner (#23): the
+    # Def 1.2 body "Eine Abbildung f: X -> Y ..." yields an inline Y stub that no
+    # formula contributes.
+    assert names == sorted(
+        ["x₁", "x₂", "X", "Y", "f", "ε", "N", "ℝ", "n", "a_n", "L"]
+    )
     # ids are unique despite slug collisions
     assert len({c.id for c in stubs}) == len(stubs)
     for c in stubs:
@@ -122,7 +127,8 @@ def test_counts_formal_vs_stub(doc: MathDocument) -> None:
     formal = [c for c in doc.concepts if c.formal_meaning]
     stub = [c for c in doc.concepts if c.formal_meaning is None]
     assert len(formal) == 3
-    assert len(stub) == 10
+    # 10 formula-symbol stubs + 1 prose-only inline stub (Y), surfaced by #23.
+    assert len(stub) == 11
 
 
 # ---------------------------------------------------------------------------

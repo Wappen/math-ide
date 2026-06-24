@@ -276,18 +276,21 @@ Paragraph.model_rebuild()
 # Occurrences
 # ---------------------------------------------------------------------------
 
-OccurrenceKind = Literal["formula_symbol", "defined_name", "citation"]
+OccurrenceKind = Literal[
+    "formula_symbol", "defined_name", "citation", "inline_symbol"
+]
 
 
 class Occurrence(BaseModel):
     """A single surface appearance of mathematical notation at one location.
 
-    Three import-time kinds: a symbol inside a formula, the defined name in a
-    formal block's label, or an explicit numbered citation. Each carries its
-    own *source bbox* (always set when known) and *render bbox* (``None`` until
-    layout). ``concept_id`` is ``None`` until meaning resolution;
-    ``target_block_id`` is set for citation occurrences pointing at the cited
-    formal block.
+    Four import-time kinds: a symbol inside a formula, the defined name in a
+    formal block's label, an explicit numbered citation, or an ``inline_symbol``
+    — a standalone identifier or named set found in prose (a paragraph, or a
+    formal block's body/preamble). Each carries its own *source bbox* (always
+    set when known) and *render bbox* (``None`` until layout). ``concept_id`` is
+    ``None`` until meaning resolution; ``target_block_id`` is set for citation
+    occurrences pointing at the cited formal block.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -406,6 +409,14 @@ class MathDocument(BaseModel):
 
     document_id: str
     source: SourceProvenance = Field(default_factory=SourceProvenance)
+    # Document-level front matter, distinct from the block tree. The leading
+    # document-title heading (and its immediately-following subtitle/date prose)
+    # is captured here rather than modeled as a top-level ``Section`` peer to the
+    # real numbered sections. All optional and default ``None`` so previously
+    # serialized documents round-trip unchanged.
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    date: Optional[str] = None
     blocks: list[Block] = Field(default_factory=list)
     occurrences: list[Occurrence] = Field(default_factory=list)
     concepts: list[Concept] = Field(default_factory=list)

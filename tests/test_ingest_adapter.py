@@ -15,6 +15,7 @@ from math_ide.ingest import build_math_document
 from math_ide.ingest.docling_adapter import (
     bbox_from_prov,
     blocks_from_docling,
+    document_metadata_from_docling,
     source_provenance,
     subdivide_bbox,
 )
@@ -196,3 +197,115 @@ def test_subdivide_bbox_none_inputs():
     assert subdivide_bbox(None, [0, 5], 0, 1) is None
     bbox = BBox(l=0.0, t=1.0, r=10.0, b=0.0)
     assert subdivide_bbox(bbox, None, 0, 1) is None
+
+
+# ---------------------------------------------------------------------------
+# Furniture filtering (#22)
+# ---------------------------------------------------------------------------
+
+
+def _prov(charlen: int = 4):
+    return [{"page_no": 1, "bbox": {"l": 0, "t": 1, "r": 1, "b": 0}, "charspan": [0, charlen]}]
+
+
+def test_furniture_content_layer_node_is_not_a_block():
+    """#22: a node with ``content_layer == "furniture"`` (a page-number footer)
+    never becomes a block."""
+    docling = {
+        "origin": {},
+        "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}]},
+        "texts": [
+            {"label": "section_header", "level": 1, "text": "1 Start", "orig": "1 Start",
+             "content_layer": "body", "prov": _prov(7)},
+            {"label": "page_footer", "text": "1", "orig": "1",
+             "content_layer": "furniture", "prov": _prov(1)},
+        ],
+    }
+    blocks = blocks_from_docling(docling, "d")
+    assert [type(b).__name__ for b in blocks] == ["Section"]
+    # No block anywhere carries the page-number text "1".
+    assert all(getattr(b, "text", None) != "1" for b in blocks)
+    assert all(getattr(c, "text", None) != "1" for b in blocks for c in b.children)
+
+
+def test_furniture_label_without_content_layer_is_still_dropped():
+    """#22: ``page_footer`` / ``page_header`` labels are dropped even when the
+    ``content_layer`` field is absent."""
+    docling = {
+        "origin": {},
+        "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}]},
+        "texts": [
+            {"label": "page_header", "text": "running head", "orig": "running head",
+             "prov": _prov()},
+            {"label": "text", "text": "Real body.", "orig": "Real body.", "prov": _prov()},
+        ],
+    }
+    blocks = blocks_from_docling(docling, "d")
+    assert [type(b).__name__ for b in blocks] == ["Paragraph"]
+    assert blocks[0].text == "Real body."
+
+
+# ---------------------------------------------------------------------------
+# Document title detection (#22)
+# ---------------------------------------------------------------------------
+
+
+def test_leading_unnumbered_header_becomes_title_metadata_not_a_section():
+    """#22: a leading un-numbered ``section_header`` is the document title; the
+    two following ``text`` nodes are the subtitle and date. None become blocks,
+    and the umlaut repair (#18) applies to the title."""
+    docling = {
+        "origin": {},
+        "body": {"children": [{"$ref": f"#/texts/{i}"} for i in range(4)]},
+        "texts": [
+            {"label": "section_header", "level": 1,
+             "text": "Einf¨ uhrung in die Analysis", "orig": "Einf¨ uhrung in die Analysis",
+             "prov": _prov()},
+            {"label": "text", "text": "Ein Skript", "orig": "Ein Skript", "prov": _prov()},
+            {"label": "text", "text": "24. Juni 2026", "orig": "24. Juni 2026", "prov": _prov()},
+            {"label": "section_header", "level": 1, "text": "1 Erstes Kapitel",
+             "orig": "1 Erstes Kapitel", "prov": _prov()},
+        ],
+    }
+    meta = document_metadata_from_docling(docling)
+    assert meta == {
+        "title": "Einführung in die Analysis",  # umlaut repaired
+        "subtitle": "Ein Skript",
+        "date": "24. Juni 2026",
+    }
+    blocks = blocks_from_docling(docling, "d")
+    # Only the numbered section survives as a block; the title is not a Section.
+    assert [type(b).__name__ for b in blocks] == ["Section"]
+    assert blocks[0].title == "1 Erstes Kapitel"
+
+
+def test_leading_numbered_header_is_not_a_title():
+    """#22 HEURISTIC SAFETY: a leading *numbered* ``section_header`` (the
+    synthetic-fixture shape) is a real Section, never the document title."""
+    docling = {
+        "origin": {},
+        "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/1"}]},
+        "texts": [
+            {"label": "section_header", "level": 1, "text": "1 Mengen und Abbildungen",
+             "orig": "1 Mengen und Abbildungen", "prov": _prov()},
+            {"label": "text", "text": "Body prose.", "orig": "Body prose.", "prov": _prov()},
+        ],
+    }
+    assert document_metadata_from_docling(docling) == {}
+    blocks = blocks_from_docling(docling, "d")
+    assert isinstance(blocks[0], Section)
+    assert blocks[0].title == "1 Mengen und Abbildungen"
+
+
+def test_synthetic_fixture_has_no_title_metadata(docling):
+    """#22 HEURISTIC SAFETY: the synthetic fixture leads with a numbered header,
+    so title detection must not fire and the document carries no front matter."""
+    doc = build_math_document(docling)
+    assert doc.title is None
+    assert doc.subtitle is None
+    assert doc.date is None
+    # Both numbered sections remain top-level Section blocks.
+    assert [b.title for b in doc.blocks if isinstance(b, Section)] == [
+        "1 Mengen und Abbildungen",
+        "2 Folgen und Konvergenz",
+    ]

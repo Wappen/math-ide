@@ -202,11 +202,31 @@ in a given document — e.g. `Y`, which appears only in the prose `f: X -> Y` an
 so has no `formula_symbol` occurrence — are skipped silently; `f` and `X` are
 still linked. After a pass, `ingestion_state = "ready"`.
 
+## Shared live-resolver machinery
+
+Both live resolvers (`AnthropicResolver` and `OpenAIResolver`) are *thin*: they
+differ only in the one-shot provider call. Everything else is **module-level**
+in `meaning.py` and shared:
+
+- `build_prompt(doc) -> str` — serialises the seeded ontology into the user
+  prompt (see below).
+- `parse_response(text, doc) -> MeaningDelta` — parses the model's JSON reply.
+- `resolve_via_completion(doc, complete, *, max_retries=2) -> MathDocument` — the
+  bounded retry / parse / `MeaningDelta.apply` loop, parameterised by a
+  `complete: Callable[[str], str]` that runs one provider completion.
+
+Each resolver's `resolve` calls `resolve_via_completion(doc, self._complete,
+max_retries=self.max_retries)`, and only `_complete` (the SDK call) is
+provider-specific. For backward compatibility each resolver also exposes
+`build_prompt` / `parse_response` as thin instance methods that delegate to the
+module-level functions, so `AnthropicResolver().build_prompt(doc) ==
+OpenAIResolver().build_prompt(doc) == build_prompt(doc)`.
+
 ## `AnthropicResolver` (live LLM, fault-tolerant)
 
 Calls the Anthropic Messages API. Model default `"claude-sonnet-4-6"`; reads
 `ANTHROPIC_API_KEY` (or an explicit `api_key=`). The `anthropic` SDK is imported
-**lazily inside the methods**, so importing `meaning.py` (and the offline test
+**lazily inside `_complete`**, so importing `meaning.py` (and the offline test
 suite) never needs the SDK or a key.
 
 **Prompt.** The system prompt (`meaning.SYSTEM_PROMPT`) states the task —
@@ -244,4 +264,39 @@ returned with whatever partial results were applied — typically none — and
 `ingestion_state` is left at `resolving` (not `ready`) to signal partial
 resolution to the pipeline. The resolver never raises into the caller. The same
 `formal_meaning` guarantee holds: a failed pass changes nothing authoritative,
-and the document still round-trips as a valid `MathDocument`.
+and the document still round-trips as a valid `MathDocument`. (This loop is the
+shared `resolve_via_completion`, so the OpenAI resolver behaves identically.)
+
+## `OpenAIResolver` (live LLM, fault-tolerant)
+
+Calls the OpenAI Chat Completions API. Model default `"gpt-4o"`
+(`meaning.DEFAULT_OPENAI_MODEL`), overridable via the `OPENAI_MODEL` environment
+variable or a `model=` constructor arg (an explicit `model=` wins over the env
+var). Reads `OPENAI_API_KEY` (or an explicit `api_key=`). The `openai` SDK is
+imported **lazily inside `_complete`**, so importing `meaning.py` (and the
+offline test suite) never needs the SDK or a key.
+
+It shares the same `SYSTEM_PROMPT`, `build_prompt`, `parse_response` and
+`resolve_via_completion` retry loop as the Anthropic resolver — only `_complete`
+differs. `_complete` calls
+`openai.OpenAI(api_key=...).chat.completions.create(model=self.model,
+messages=[{role: system, content: SYSTEM_PROMPT}, {role: user, content:
+prompt}], ...)` and returns `resp.choices[0].message.content` (raising
+`ValueError` if it is empty). The failure-tolerance contract is identical:
+bounded retries, partial doc at `resolving` on exhaustion, never raises, and
+`formal_meaning` is never touched.
+
+## `auto_resolver` — environment-driven selection
+
+`auto_resolver() -> Resolver` picks a resolver from the environment so callers
+need not hard-code a provider:
+
+1. `ANTHROPIC_API_KEY` set -> `AnthropicResolver()`.
+2. else `OPENAI_API_KEY` set -> `OpenAIResolver()`.
+3. else `MockResolver()`, plus a one-line warning to `stderr`
+   (`auto resolver: no ANTHROPIC_API_KEY or OPENAI_API_KEY set; falling back to
+   offline MockResolver.`).
+
+Because constructing the live resolvers never imports their SDKs (the imports
+are lazy in `_complete`), `auto_resolver` works fully offline — it only reads
+environment variables and never touches the network.

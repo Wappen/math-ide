@@ -43,6 +43,7 @@ re-converted from the PDF in this process).
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from math_ide.schema import (
@@ -59,7 +60,47 @@ __all__ = [
     "subdivide_bbox",
     "source_provenance",
     "blocks_from_docling",
+    "normalize_text",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Text normalization
+# ---------------------------------------------------------------------------
+
+# Map a plain vowel to its precomposed umlaut. Both cases are repaired.
+_UMLAUT = {
+    "a": "ä",
+    "o": "ö",
+    "u": "ü",
+    "A": "Ä",
+    "O": "Ö",
+    "U": "Ü",
+}
+
+# Live Docling sometimes emits a *decomposed* diaeresis: a standalone diaeresis
+# mark — the spacing diaeresis "¨" (U+00A8) or the combining diaeresis (U+0308)
+# — optionally followed by a single space, sitting *before* the vowel it should
+# sit on top of, e.g. "f¨ ur" / "Injektivit¨ at" / "ann¨ ahern". We re-attach
+# the mark to the following a/o/u (either case) to recover "für" / "Injektivität"
+# / "annähern". This is intentionally minimal: it is a no-op on clean text and
+# does NOT attempt NFC normalization or UTF-8/Latin-1 mojibake repair.
+_DECOMPOSED_DIAERESIS_RE = re.compile("[¨̈] ?([aouAOU])")
+
+
+def normalize_text(s: str) -> str:
+    """Repair Docling's decomposed-diaeresis corruption; identity otherwise.
+
+    A standalone diaeresis mark (``"¨"`` U+00A8 or combining U+0308), optionally
+    followed by a single space, immediately before a vowel in ``[aouAOU]`` is
+    folded into the corresponding precomposed umlaut (e.g. ``"f¨ ur"`` ->
+    ``"für"``, ``"Injektivit¨ at"`` -> ``"Injektivität"``). Already-correct text
+    — including precomposed umlauts and ASCII spellings like ``"Injektivitaet"``
+    — is returned unchanged.
+    """
+    if not s:
+        return s
+    return _DECOMPOSED_DIAERESIS_RE.sub(lambda m: _UMLAUT[m.group(1)], s)
 
 
 # ---------------------------------------------------------------------------
@@ -172,11 +213,36 @@ def _resolve_ref(docling: dict[str, Any], ref: str) -> Optional[dict[str, Any]]:
     return cursor if isinstance(cursor, dict) else None
 
 
+def _normalized_node(node: dict[str, Any]) -> dict[str, Any]:
+    """Shallow-copy ``node`` with its ``text``/``orig`` strings normalized.
+
+    Applying the repair here — at the single seam every body node passes
+    through — means ALL downstream consumers (formal-block detection, formula,
+    section, paragraph builders) see corrected text without each having to call
+    :func:`normalize_text` itself. The original node dict is left untouched.
+
+    Normalization can shift character offsets relative to the node's
+    ``charspan``; that is an accepted imprecision in the single-line bbox
+    approximation and we deliberately do not remap charspans here.
+    """
+    if not isinstance(node, dict):
+        return node
+    if "text" not in node and "orig" not in node:
+        return node
+    out = dict(node)
+    if isinstance(out.get("text"), str):
+        out["text"] = normalize_text(out["text"])
+    if isinstance(out.get("orig"), str):
+        out["orig"] = normalize_text(out["orig"])
+    return out
+
+
 def _iter_body_nodes(docling: dict[str, Any]):
-    """Yield text nodes in reading order.
+    """Yield text nodes in reading order, with text/orig normalized.
 
     Prefers ``body.children`` ``$ref`` order; falls back to ``texts`` order if
-    the body is missing.
+    the body is missing. Each yielded node is a shallow copy whose ``text`` and
+    ``orig`` have been repaired by :func:`normalize_text`.
     """
     body = docling.get("body") or {}
     children = body.get("children")
@@ -187,10 +253,10 @@ def _iter_body_nodes(docling: dict[str, Any]):
                 continue
             node = _resolve_ref(docling, ref)
             if node is not None:
-                yield node
+                yield _normalized_node(node)
         return
     for node in docling.get("texts", []):
-        yield node
+        yield _normalized_node(node)
 
 
 def _make_section(document_id: str, node: dict[str, Any], index: int) -> Section:

@@ -42,11 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable OCR for scanned/image PDFs (slower; off by default).",
     )
     parser.add_argument(
-        "--formula",
+        "--no-formula",
         action="store_true",
+        dest="no_formula",
+        default=False,
         help=(
-            "Recognize formulas and convert them to LaTeX (slower; "
-            "recommended for math PDFs, especially with --format latex)."
+            "Disable formula enrichment. Formula recognition (converting "
+            "formulas to LaTeX) is ON by default; pass this flag to opt out "
+            "for faster/debug runs (formulas keep only their orig fallback, "
+            "no LaTeX)."
         ),
     )
     return parser
@@ -109,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     source = read_pdf_source(args.pdf)
 
-    converter = build_converter(args.ocr, args.formula)
+    converter = build_converter(args.ocr, not args.no_formula)
     result = converter.convert(source)
 
     if result.status != ConversionStatus.SUCCESS:

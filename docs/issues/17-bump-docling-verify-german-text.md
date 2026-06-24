@@ -36,3 +36,49 @@ Related: **#3**, **#4**.
 - Adapter-side `normalize_text()` (**#18** — only if this issue fails)
 - Enabling OCR by default (**#16** covers formula default separately; OCR remains opt-in)
 - Source PDF re-export / font-embedding documentation (acceptable fallback if neither bump nor **#18** fully fixes a given PDF)
+
+## Verification outcome
+
+**Status: INCONCLUSIVE in this environment — live re-conversion was not performed.**
+
+The `docling` lower bound in `requirements-ingest.txt` was bumped from `>=2.0.0`
+to `>=2.7.0` (kept as a lower bound, not a hard pin). However, the verification
+that this issue requires — re-converting `example.pdf` and inspecting the
+exported `text` / `orig` strings — **could not be run** in the offline dev
+environment:
+
+- `docling` is **not installed** in the project virtualenv (and per project
+  constraints it stays uninstalled so the offline test suite runs without the
+  heavy SDK), so no conversion could be executed.
+- `example.pdf` is **absent** (it is gitignored), so there was no input PDF to
+  convert and inspect.
+
+Because the umlaut quality of the bumped Docling could not be observed here, the
+upstream fix is **unverified**. Per this issue's gate ("If verification fails:
+note the failure in this issue and proceed with #18"), the inconclusive result
+is treated as not-passing, and the deterministic adapter-side fallback (**#18**)
+**proceeds**.
+
+### Reconciliation with #18 (defense-in-depth)
+
+These two paths do not conflict. The #18 `normalize_text()` repair targets only
+the specific decomposed-diaeresis patterns (`¨ a` → `ä`, etc.) and is a **no-op
+on already-correct text**: applied to a string that already contains proper
+`ä`/`ö`/`ü`/`ß`, it changes nothing. Therefore, if a later re-conversion on real
+hardware with the bumped Docling turns out to fix umlauts upstream, the #18
+fallback remains **harmless** — it simply finds no decomposed patterns to
+repair. Keeping both is defense-in-depth: the adapter stays robust whether or
+not a given PDF / Docling version emits clean umlauts.
+
+### Recommended follow-up
+
+Re-run this verification on **real hardware** with `docling>=2.7.0` installed:
+
+1. Install the ingest extras and obtain `example.pdf`.
+2. Re-convert it through the normal Docling pipeline.
+3. Inspect both `text` and `orig` on prose nodes and formal-block labels for
+   `ä`/`ö`/`ü`/`ß` (e.g. `für`, `Injektivität`, `annähern`) rather than `¨` +
+   space + vowel.
+4. If umlauts are clean, record the verified version here and note that #18 is
+   now redundant-but-harmless; if still decomposed, #18 carries the fix as
+   designed.

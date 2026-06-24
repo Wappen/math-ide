@@ -23,7 +23,7 @@ reads the seeded document and applies a *delta*:
   flipped ``pending`` -> ``resolved``; on completion the document advances to
   ``ingestion_state="ready"``.
 
-Two resolvers ship here:
+Three resolvers ship here:
 
 * :class:`MockResolver` — deterministic, offline, no network. It encodes the
   coreference the example corpus needs and is what the tests exercise.
@@ -32,6 +32,21 @@ Two resolvers ship here:
   methods so importing this module never requires it. It tolerates API/parse
   failure: it retries a bounded number of times then returns the document with
   whatever **partial** results it managed, never raising into the pipeline.
+* :class:`OpenAIResolver` — calls the OpenAI Chat Completions API (model default
+  ``"gpt-4o"``). The ``openai`` SDK is imported lazily inside ``_complete`` so
+  importing this module never requires it. Same fault tolerance as the Anthropic
+  resolver.
+
+Both live resolvers route prompt-building, response parsing and the bounded
+retry loop through the **module-level** helpers :func:`build_prompt`,
+:func:`parse_response` and :func:`resolve_via_completion`; only the one-shot
+``_complete`` (the SDK call) differs between them.
+
+The factory :func:`auto_resolver` picks a resolver from the environment:
+``ANTHROPIC_API_KEY`` -> :class:`AnthropicResolver`, else ``OPENAI_API_KEY`` ->
+:class:`OpenAIResolver`, else :class:`MockResolver` (with a one-line warning to
+``stderr``). Constructing the live resolvers never imports their SDKs, so the
+factory works fully offline.
 
 The authoritative-meaning rule is enforced structurally: resolvers route every
 write through :class:`MeaningDelta`, whose :meth:`MeaningDelta.apply` refuses to
@@ -43,8 +58,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass, field
-from typing import Optional, Protocol, runtime_checkable
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 from math_ide.schema import (
     Concept,
@@ -61,7 +77,13 @@ __all__ = [
     "MeaningDelta",
     "MockResolver",
     "AnthropicResolver",
+    "OpenAIResolver",
+    "auto_resolver",
+    "build_prompt",
+    "parse_response",
+    "resolve_via_completion",
     "DEFAULT_MODEL",
+    "DEFAULT_OPENAI_MODEL",
     "SYSTEM_PROMPT",
 ]
 
@@ -69,6 +91,9 @@ logger = logging.getLogger(__name__)
 
 #: Default Anthropic model id for :class:`AnthropicResolver`.
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+#: Default OpenAI model id for :class:`OpenAIResolver`.
+DEFAULT_OPENAI_MODEL = "gpt-4o"
 
 _SEMANTIC_KINDS: frozenset[RelationKind] = frozenset(
     {"uses", "defines", "generalizes", "specializes", "instance_of"}
@@ -346,11 +371,11 @@ class MockResolver:
 
 
 # ---------------------------------------------------------------------------
-# AnthropicResolver — live LLM, fault-tolerant
+# Shared live-resolver machinery (prompt, parse, retry loop)
 # ---------------------------------------------------------------------------
 
 
-#: System prompt for the live resolver. Documents the contract the model must
+#: System prompt for the live resolvers. Documents the contract the model must
 #: honour; the JSON output schema is described in :data:`OUTPUT_SCHEMA_DOC`.
 SYSTEM_PROMPT = """\
 You are the meaning-resolution stage of a math-document pipeline. You are given
@@ -393,6 +418,135 @@ OUTPUT_SCHEMA_DOC = """\
 """
 
 
+def build_prompt(doc: MathDocument) -> str:
+    """Serialise the seeded ontology into the user prompt for the model.
+
+    Only the fields the model needs are sent; ``formal_meaning`` is included
+    read-only so the model can corefer against it but is told never to change it
+    (see :data:`SYSTEM_PROMPT`). Shared by every live resolver.
+    """
+    concepts = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "formal_meaning": c.formal_meaning,
+            "resolution_status": c.resolution_status,
+        }
+        for c in doc.concepts
+    ]
+    formulas = {b.id: b for b in iter_blocks(doc.blocks) if isinstance(b, Formula)}
+    occurrences = []
+    for occ in doc.occurrences:
+        token = None
+        if occ.kind == "formula_symbol" and occ.span is not None:
+            formula = formulas.get(occ.block_id)
+            if formula is not None:
+                token = formula.canonical_content[occ.span[0] : occ.span[1]]
+        occurrences.append(
+            {
+                "id": occ.id,
+                "kind": occ.kind,
+                "token": token,
+                "block_id": occ.block_id,
+                "concept_id": occ.concept_id,
+            }
+        )
+    payload = {"concepts": concepts, "occurrences": occurrences}
+    return (
+        "Resolve the meaning of this seeded ontology. Return JSON matching "
+        "this schema exactly:\n"
+        f"{OUTPUT_SCHEMA_DOC}\n"
+        "Ontology:\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+
+
+def parse_response(text: str, doc: MathDocument) -> MeaningDelta:
+    """Parse the model's JSON reply into a :class:`MeaningDelta`.
+
+    Raises ``ValueError`` if the reply is not the documented JSON object; the
+    caller treats that as a retryable failure. Shared by every live resolver.
+    The ``doc`` argument is accepted for signature symmetry with
+    :func:`build_prompt` (the delta is validated against the document on apply).
+    """
+    data = json.loads(_extract_json(text))
+    if not isinstance(data, dict):
+        raise ValueError("model reply was not a JSON object")
+
+    delta = MeaningDelta()
+    for link in data.get("occurrence_links", []) or []:
+        occ_id = link.get("occurrence_id")
+        concept_id = link.get("concept_id")
+        if isinstance(occ_id, str) and isinstance(concept_id, str):
+            delta.link(occ_id, concept_id)
+    for item in data.get("inferred_meanings", []) or []:
+        concept_id = item.get("concept_id")
+        meaning = item.get("meaning")
+        if isinstance(concept_id, str) and isinstance(meaning, str):
+            delta.infer(concept_id, meaning)
+    for rel in data.get("relations", []) or []:
+        src = rel.get("source_concept_id")
+        tgt = rel.get("target_concept_id")
+        kind = rel.get("kind")
+        if (
+            isinstance(src, str)
+            and isinstance(tgt, str)
+            and kind in _SEMANTIC_KINDS
+        ):
+            delta.relate(src, tgt, kind)  # type: ignore[arg-type]
+    return delta
+
+
+def resolve_via_completion(
+    doc: MathDocument,
+    complete: Callable[[str], str],
+    *,
+    max_retries: int = 2,
+) -> MathDocument:
+    """Run the shared resolve loop, parameterised by a one-shot ``complete``.
+
+    Builds the prompt, then up to ``max_retries`` + 1 times: calls ``complete``
+    (the provider-specific single completion), parses the reply via
+    :func:`parse_response`, applies the delta, and advances the document to
+    ``ready``. On any API or parse error the attempt is retried; if every
+    attempt fails the document is returned with whatever partial results were
+    applied (often none) and ``ingestion_state`` is left at ``resolving`` rather
+    than ``ready`` — the pipeline is never crashed.
+    """
+    doc.ingestion_state = "resolving"
+    prompt = build_prompt(doc)
+
+    last_error: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
+        try:
+            text = complete(prompt)
+            delta = parse_response(text, doc)
+        except Exception as exc:  # noqa: BLE001 - resolver must not crash
+            last_error = exc
+            logger.warning(
+                "resolve attempt %d/%d failed: %s",
+                attempt + 1,
+                max_retries + 1,
+                exc,
+            )
+            continue
+        delta.apply(doc)
+        doc.ingestion_state = "ready"
+        return doc
+
+    logger.error(
+        "resolve exhausted %d attempts; returning partial doc (%s)",
+        max_retries + 1,
+        last_error,
+    )
+    return doc  # PARTIAL: state stays "resolving", no exception propagated.
+
+
+# ---------------------------------------------------------------------------
+# AnthropicResolver — live LLM, fault-tolerant
+# ---------------------------------------------------------------------------
+
+
 class AnthropicResolver:
     """A :class:`Resolver` backed by the Anthropic Messages API.
 
@@ -410,8 +564,12 @@ class AnthropicResolver:
     max_tokens:
         Output-token cap for the single completion.
 
-    The ``anthropic`` package is imported lazily inside the methods so importing
-    this module (and running the offline tests) never requires the SDK or a key.
+    Prompt-building, parsing and the retry loop are the shared module-level
+    functions :func:`build_prompt` / :func:`parse_response` /
+    :func:`resolve_via_completion`; only :meth:`_complete` is provider-specific.
+    The ``anthropic`` package is imported lazily inside :meth:`_complete` so
+    importing this module (and running the offline tests) never requires the SDK
+    or a key.
     """
 
     def __init__(
@@ -427,122 +585,27 @@ class AnthropicResolver:
         self.max_retries = max_retries
         self.max_tokens = max_tokens
 
-    # -- prompt construction ------------------------------------------------
+    # -- shared machinery, exposed as thin instance methods (back-compat) ----
 
     def build_prompt(self, doc: MathDocument) -> str:
-        """Serialise the seeded ontology into the user prompt for the model.
-
-        Only the fields the model needs are sent; ``formal_meaning`` is included
-        read-only so the model can corefer against it but is told never to
-        change it (see :data:`SYSTEM_PROMPT`).
-        """
-        concepts = [
-            {
-                "id": c.id,
-                "name": c.name,
-                "formal_meaning": c.formal_meaning,
-                "resolution_status": c.resolution_status,
-            }
-            for c in doc.concepts
-        ]
-        formulas = {b.id: b for b in iter_blocks(doc.blocks) if isinstance(b, Formula)}
-        occurrences = []
-        for occ in doc.occurrences:
-            token = None
-            if occ.kind == "formula_symbol" and occ.span is not None:
-                formula = formulas.get(occ.block_id)
-                if formula is not None:
-                    token = formula.canonical_content[occ.span[0] : occ.span[1]]
-            occurrences.append(
-                {
-                    "id": occ.id,
-                    "kind": occ.kind,
-                    "token": token,
-                    "block_id": occ.block_id,
-                    "concept_id": occ.concept_id,
-                }
-            )
-        payload = {"concepts": concepts, "occurrences": occurrences}
-        return (
-            "Resolve the meaning of this seeded ontology. Return JSON matching "
-            "this schema exactly:\n"
-            f"{OUTPUT_SCHEMA_DOC}\n"
-            "Ontology:\n"
-            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
-        )
-
-    # -- response parsing ---------------------------------------------------
+        """Delegate to the module-level :func:`build_prompt`."""
+        return build_prompt(doc)
 
     def parse_response(self, text: str, doc: MathDocument) -> MeaningDelta:
-        """Parse the model's JSON reply into a :class:`MeaningDelta`.
-
-        Raises ``ValueError`` if the reply is not the documented JSON object;
-        the caller treats that as a retryable failure.
-        """
-        data = json.loads(_extract_json(text))
-        if not isinstance(data, dict):
-            raise ValueError("model reply was not a JSON object")
-
-        delta = MeaningDelta()
-        for link in data.get("occurrence_links", []) or []:
-            occ_id = link.get("occurrence_id")
-            concept_id = link.get("concept_id")
-            if isinstance(occ_id, str) and isinstance(concept_id, str):
-                delta.link(occ_id, concept_id)
-        for item in data.get("inferred_meanings", []) or []:
-            concept_id = item.get("concept_id")
-            meaning = item.get("meaning")
-            if isinstance(concept_id, str) and isinstance(meaning, str):
-                delta.infer(concept_id, meaning)
-        for rel in data.get("relations", []) or []:
-            src = rel.get("source_concept_id")
-            tgt = rel.get("target_concept_id")
-            kind = rel.get("kind")
-            if (
-                isinstance(src, str)
-                and isinstance(tgt, str)
-                and kind in _SEMANTIC_KINDS
-            ):
-                delta.relate(src, tgt, kind)  # type: ignore[arg-type]
-        return delta
+        """Delegate to the module-level :func:`parse_response`."""
+        return parse_response(text, doc)
 
     # -- the resolve loop ---------------------------------------------------
 
     def resolve(self, doc: MathDocument) -> MathDocument:
         """Resolve via the API, tolerating failure with partial results.
 
-        On any API or parse error the call is retried up to ``max_retries``
-        times. If every attempt fails the document is returned with whatever
-        was applied so far (often nothing) and ``ingestion_state`` is left at
-        ``resolving`` rather than ``ready`` — the pipeline keeps running.
+        Routes through the shared :func:`resolve_via_completion`, supplying the
+        Anthropic-specific one-shot :meth:`_complete`.
         """
-        doc.ingestion_state = "resolving"
-        prompt = self.build_prompt(doc)
-
-        last_error: Optional[Exception] = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                text = self._complete(prompt)
-                delta = self.parse_response(text, doc)
-            except Exception as exc:  # noqa: BLE001 - resolver must not crash
-                last_error = exc
-                logger.warning(
-                    "AnthropicResolver attempt %d/%d failed: %s",
-                    attempt + 1,
-                    self.max_retries + 1,
-                    exc,
-                )
-                continue
-            delta.apply(doc)
-            doc.ingestion_state = "ready"
-            return doc
-
-        logger.error(
-            "AnthropicResolver exhausted %d attempts; returning partial doc (%s)",
-            self.max_retries + 1,
-            last_error,
+        return resolve_via_completion(
+            doc, self._complete, max_retries=self.max_retries
         )
-        return doc  # PARTIAL: state stays "resolving", no exception propagated.
 
     def _complete(self, prompt: str) -> str:
         """Run one completion and return the model's text. Lazy SDK import."""
@@ -565,6 +628,121 @@ class AnthropicResolver:
         if not parts:
             raise ValueError("model returned no text content")
         return "".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# OpenAIResolver — live LLM, fault-tolerant
+# ---------------------------------------------------------------------------
+
+
+class OpenAIResolver:
+    """A :class:`Resolver` backed by the OpenAI Chat Completions API.
+
+    Parameters
+    ----------
+    model:
+        OpenAI model id. Defaults to :data:`DEFAULT_OPENAI_MODEL` (``"gpt-4o"``),
+        overridable via the ``OPENAI_MODEL`` environment variable or this arg.
+    api_key:
+        Overrides ``OPENAI_API_KEY`` from the environment when given.
+    max_retries:
+        How many times to retry on an API or response-parse error before giving
+        up. After the budget is exhausted the document is returned with whatever
+        partial results were applied — the pipeline is never crashed.
+    max_tokens:
+        Output-token cap for the single completion.
+
+    Prompt-building, parsing and the retry loop are the shared module-level
+    functions :func:`build_prompt` / :func:`parse_response` /
+    :func:`resolve_via_completion`; only :meth:`_complete` is provider-specific.
+    The ``openai`` package is imported lazily inside :meth:`_complete` so
+    importing this module (and running the offline tests) never requires the SDK
+    or a key.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        max_retries: int = 2,
+        max_tokens: int = 4096,
+    ) -> None:
+        self.model = model or os.environ.get("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL
+        self.api_key = api_key
+        self.max_retries = max_retries
+        self.max_tokens = max_tokens
+
+    # -- shared machinery, exposed as thin instance methods (back-compat) ----
+
+    def build_prompt(self, doc: MathDocument) -> str:
+        """Delegate to the module-level :func:`build_prompt`."""
+        return build_prompt(doc)
+
+    def parse_response(self, text: str, doc: MathDocument) -> MeaningDelta:
+        """Delegate to the module-level :func:`parse_response`."""
+        return parse_response(text, doc)
+
+    # -- the resolve loop ---------------------------------------------------
+
+    def resolve(self, doc: MathDocument) -> MathDocument:
+        """Resolve via the API, tolerating failure with partial results.
+
+        Routes through the shared :func:`resolve_via_completion`, supplying the
+        OpenAI-specific one-shot :meth:`_complete`.
+        """
+        return resolve_via_completion(
+            doc, self._complete, max_retries=self.max_retries
+        )
+
+    def _complete(self, prompt: str) -> str:
+        """Run one completion and return the model's text. Lazy SDK import."""
+        import openai  # lazy: importing this module never needs the SDK.
+
+        client = openai.OpenAI(
+            api_key=self.api_key or os.environ.get("OPENAI_API_KEY")
+        )
+        resp = client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        content = resp.choices[0].message.content
+        if not content:
+            raise ValueError("model returned no text content")
+        return content
+
+
+# ---------------------------------------------------------------------------
+# auto_resolver — pick a resolver from the environment
+# ---------------------------------------------------------------------------
+
+
+def auto_resolver() -> Resolver:
+    """Pick a :class:`Resolver` from the environment.
+
+    Preference order:
+
+    1. ``ANTHROPIC_API_KEY`` set -> :class:`AnthropicResolver`.
+    2. else ``OPENAI_API_KEY`` set -> :class:`OpenAIResolver`.
+    3. else :class:`MockResolver`, with a one-line warning to ``stderr``.
+
+    Constructing the live resolvers never imports their SDKs (the imports are
+    lazy in ``_complete``), so this factory works fully offline.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return AnthropicResolver()
+    if os.environ.get("OPENAI_API_KEY"):
+        return OpenAIResolver()
+    print(
+        "auto resolver: no ANTHROPIC_API_KEY or OPENAI_API_KEY set; "
+        "falling back to offline MockResolver.",
+        file=sys.stderr,
+    )
+    return MockResolver()
 
 
 # ---------------------------------------------------------------------------

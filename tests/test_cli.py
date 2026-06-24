@@ -110,10 +110,15 @@ def test_ingest_default_writes_structure_ready_doc(tmp_path: Path) -> None:
 
 
 def test_ingest_wait_writes_ready_doc_with_semantic_relations(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
-    """--wait runs stage 2 (default mock resolver) -> a 'ready' doc carrying
-    semantic relations."""
+    """--wait runs stage 2 -> a 'ready' doc carrying semantic relations.
+
+    With no API keys set the default ``auto`` resolver falls back to the
+    offline mock (emitting a stderr warning), so this stays network-free.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     out = tmp_path / "doc.json"
     rc = ingest_cli.run([str(FIXTURE), "-o", str(out), "--wait"])
     assert rc == 0
@@ -121,8 +126,22 @@ def test_ingest_wait_writes_ready_doc_with_semantic_relations(
     doc = _read_doc(out)
     assert doc["ingestion_state"] == "ready"
     assert any(r["origin"] == "semantic" for r in doc["relations"]), (
-        "the mock resolver must add semantic relations"
+        "the resolver must add semantic relations"
     )
+
+
+def test_ingest_wait_resolver_mock_writes_ready_doc(tmp_path: Path) -> None:
+    """Pinning --resolver mock under --wait still produces a ready doc with
+    semantic relations (the explicit, key-free path)."""
+    out = tmp_path / "doc.json"
+    rc = ingest_cli.run(
+        [str(FIXTURE), "-o", str(out), "--wait", "--resolver", "mock"]
+    )
+    assert rc == 0
+
+    doc = _read_doc(out)
+    assert doc["ingestion_state"] == "ready"
+    assert any(r["origin"] == "semantic" for r in doc["relations"])
 
 
 def test_ingest_document_id_namespaces_all_ids(tmp_path: Path) -> None:
@@ -164,9 +183,65 @@ def test_ingest_output_round_trips_through_schema(tmp_path: Path) -> None:
 
 
 def test_ingest_build_parser_defaults() -> None:
-    """The parser exposes the documented defaults (mock resolver, no --wait)."""
+    """The parser exposes the documented defaults.
+
+    The parser-level ``--resolver`` default is now ``None`` (the effective name
+    is computed in ``run()`` and depends on ``--wait``); ``--wait`` still
+    defaults to ``False`` and ``--no-formula`` to ``False``.
+    """
     args = ingest_cli.build_parser().parse_args([str(FIXTURE)])
     assert args.source == str(FIXTURE)
     assert args.wait is False
-    assert args.resolver == "mock"
+    assert args.resolver is None
+    assert args.no_formula is False
     assert args.document_id is None
+
+
+def test_effective_resolver_default_depends_on_wait() -> None:
+    """With no explicit --resolver, --wait selects 'auto', else 'mock'."""
+    assert ingest_cli._effective_resolver_name(None, wait=True) == "auto"
+    assert ingest_cli._effective_resolver_name(None, wait=False) == "mock"
+
+
+def test_effective_resolver_explicit_choice_wins() -> None:
+    """An explicit --resolver always overrides the --wait-derived default."""
+    assert ingest_cli._effective_resolver_name("openai", wait=True) == "openai"
+    assert ingest_cli._effective_resolver_name("anthropic", wait=False) == (
+        "anthropic"
+    )
+    assert ingest_cli._effective_resolver_name("mock", wait=True) == "mock"
+
+
+def test_ingest_no_formula_parsing() -> None:
+    """--no-formula parses to True when passed, False by default."""
+    parser = ingest_cli.build_parser()
+    assert parser.parse_args([str(FIXTURE)]).no_formula is False
+    assert parser.parse_args([str(FIXTURE), "--no-formula"]).no_formula is True
+
+
+def test_ingest_resolver_choices_include_openai_and_auto() -> None:
+    """The new resolver choices are wired into the parser."""
+    parser = ingest_cli.build_parser()
+    # All four choices parse without error.
+    for name in ("mock", "anthropic", "openai", "auto"):
+        args = parser.parse_args([str(FIXTURE), "--resolver", name])
+        assert args.resolver == name
+
+
+def test_ingest_resolver_openai_fails_fast_without_key(monkeypatch) -> None:
+    """--wait --resolver openai with no OPENAI_API_KEY fails fast (SystemExit),
+    before any client construction or network call."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(SystemExit) as excinfo:
+        ingest_cli.run([str(FIXTURE), "--wait", "--resolver", "openai"])
+    assert excinfo.value.code == 2
+
+
+def test_ingest_resolver_anthropic_fails_fast_without_key(monkeypatch) -> None:
+    """--wait --resolver anthropic with no ANTHROPIC_API_KEY fails fast."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(SystemExit) as excinfo:
+        ingest_cli.run([str(FIXTURE), "--wait", "--resolver", "anthropic"])
+    assert excinfo.value.code == 2

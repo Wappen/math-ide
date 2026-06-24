@@ -15,10 +15,18 @@ from math_ide.ingest import build_math_document
 from math_ide.ontology import (
     AnthropicResolver,
     MockResolver,
+    OpenAIResolver,
     Resolver,
+    auto_resolver,
     seed_ontology,
 )
-from math_ide.ontology.meaning import DEFAULT_MODEL, MeaningDelta
+from math_ide.ontology.meaning import (
+    DEFAULT_MODEL,
+    DEFAULT_OPENAI_MODEL,
+    MeaningDelta,
+    build_prompt,
+    parse_response,
+)
 from math_ide.schema import MathDocument
 
 FIXTURE = Path(__file__).parent / "fixtures" / "example_docling.json"
@@ -454,3 +462,227 @@ def test_build_prompt_includes_concepts_and_tokens(seeded: MathDocument) -> None
     # the documented schema keys appear so the model knows the contract
     assert "occurrence_links" in prompt
     assert "inferred_meanings" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Shared module-level functions (build_prompt / parse_response)
+# ---------------------------------------------------------------------------
+
+
+def test_module_functions_are_importable() -> None:
+    """build_prompt / parse_response live at module scope and are callable."""
+    assert callable(build_prompt)
+    assert callable(parse_response)
+
+
+def test_both_resolvers_share_build_prompt(seeded: MathDocument) -> None:
+    """Both live resolvers delegate to the same module-level build_prompt."""
+    anthropic_prompt = AnthropicResolver().build_prompt(seeded)
+    openai_prompt = OpenAIResolver().build_prompt(seeded)
+    module_prompt = build_prompt(seeded)
+    assert anthropic_prompt == openai_prompt == module_prompt
+
+
+def test_both_resolvers_share_parse_response(seeded: MathDocument) -> None:
+    """Both live resolvers delegate to the same module-level parse_response."""
+    eps = _concept_by_name(seeded, "ε")
+    reply = json.dumps(
+        {"inferred_meanings": [{"concept_id": eps.id, "meaning": "shared"}]}
+    )
+    a = AnthropicResolver().parse_response(reply, seeded)
+    o = OpenAIResolver().parse_response(reply, seeded)
+    m = parse_response(reply, seeded)
+    assert a.inferred_meaning == o.inferred_meaning == m.inferred_meaning
+    assert m.inferred_meaning == {eps.id: "shared"}
+
+
+# ---------------------------------------------------------------------------
+# OpenAIResolver — offline behaviour only (no network)
+# ---------------------------------------------------------------------------
+
+
+class _StubChoiceMessage:
+    def __init__(self, content) -> None:
+        self.content = content
+
+
+class _StubChoice:
+    def __init__(self, content) -> None:
+        self.message = _StubChoiceMessage(content)
+
+
+class _StubChatResponse:
+    def __init__(self, content) -> None:
+        self.choices = [_StubChoice(content)]
+
+
+class _StubCompletions:
+    def __init__(self, behaviour) -> None:
+        self._behaviour = behaviour
+
+    def create(self, **kwargs):
+        return self._behaviour(kwargs)
+
+
+class _StubChat:
+    def __init__(self, behaviour) -> None:
+        self.completions = _StubCompletions(behaviour)
+
+
+class _StubOpenAIClient:
+    def __init__(self, behaviour) -> None:
+        self.chat = _StubChat(behaviour)
+
+
+def _install_stub_openai(monkeypatch, behaviour) -> None:
+    """Patch the lazily-imported ``openai`` module with a stub client.
+
+    ``behaviour(kwargs)`` returns the text the model should reply with; the stub
+    wraps it as ``resp.choices[0].message.content`` exactly as ``_complete``
+    reads it.
+    """
+    import types
+
+    stub = types.ModuleType("openai")
+    stub.OpenAI = lambda **kwargs: _StubOpenAIClient(  # type: ignore[attr-defined]
+        lambda call_kwargs: _StubChatResponse(behaviour(call_kwargs))
+    )
+    monkeypatch.setitem(__import__("sys").modules, "openai", stub)
+
+
+def test_openai_resolver_satisfies_resolver_protocol() -> None:
+    assert isinstance(OpenAIResolver(), Resolver)
+
+
+def test_openai_resolver_defaults_to_gpt_4o() -> None:
+    assert OpenAIResolver().model == DEFAULT_OPENAI_MODEL == "gpt-4o"
+
+
+def test_openai_resolver_respects_model_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    assert OpenAIResolver().model == "gpt-4o-mini"
+    # an explicit constructor arg still wins over the env var.
+    assert OpenAIResolver(model="gpt-4.1").model == "gpt-4.1"
+
+
+def test_openai_resolver_applies_valid_reply(monkeypatch, seeded) -> None:
+    """A well-formed JSON reply is parsed and applied; doc reaches ready."""
+    eps = _concept_by_name(seeded, "ε")
+    konvergenz = _concept_by_name(seeded, "Konvergenz")
+    eps_occ = next(
+        o
+        for o in seeded.occurrences
+        if o.kind == "formula_symbol"
+        and o.span is not None
+        and _occ_token(seeded, o) == "ε"
+    )
+    reply = json.dumps(
+        {
+            "occurrence_links": [
+                {"occurrence_id": eps_occ.id, "concept_id": konvergenz.id}
+            ],
+            "inferred_meanings": [{"concept_id": eps.id, "meaning": "error bound"}],
+            "relations": [
+                {
+                    "source_concept_id": eps.id,
+                    "target_concept_id": konvergenz.id,
+                    "kind": "uses",
+                }
+            ],
+        }
+    )
+    _install_stub_openai(monkeypatch, lambda kwargs: reply)
+
+    OpenAIResolver(max_retries=1).resolve(seeded)
+
+    assert seeded.ingestion_state == "ready"
+    assert eps_occ.concept_id == konvergenz.id
+    assert eps.inferred_meaning == "error bound"
+    semantic = {
+        (r.source_concept_id, r.target_concept_id, r.kind)
+        for r in seeded.relations
+        if r.origin == "semantic"
+    }
+    assert (eps.id, konvergenz.id, "uses") in semantic
+
+
+def test_openai_resolver_tolerates_failure_with_partial_doc(
+    monkeypatch, seeded
+) -> None:
+    """On repeated API failure the resolver returns a usable (partial) doc."""
+    calls = {"n": 0}
+
+    def always_fail(_kwargs):
+        calls["n"] += 1
+        raise RuntimeError("simulated API outage")
+
+    _install_stub_openai(monkeypatch, always_fail)
+
+    formal_before = {
+        c.id: c.formal_meaning
+        for c in seeded.concepts
+        if c.formal_meaning is not None
+    }
+
+    result = OpenAIResolver(max_retries=2).resolve(seeded)
+
+    # never crashed; same document is returned and is still usable
+    assert result is seeded
+    assert calls["n"] == 3  # initial attempt + 2 retries
+
+    # partial: no semantic relations were added, structural ones intact
+    assert not any(r.origin == "semantic" for r in result.relations)
+    assert any(r.origin == "structural" for r in result.relations)
+
+    # formal meaning still authoritative and unchanged
+    formal_after = {
+        c.id: c.formal_meaning
+        for c in result.concepts
+        if c.formal_meaning is not None
+    }
+    assert formal_after == formal_before
+
+    # state did not advance to ready (signals partial resolution to the pipeline)
+    assert result.ingestion_state == "resolving"
+
+    # the document still round-trips — it is a valid MathDocument
+    restored = MathDocument.model_validate_json(result.model_dump_json())
+    assert restored == result
+
+
+def test_openai_resolver_tolerates_empty_content(monkeypatch, seeded) -> None:
+    """An empty message content is a failure, not a crash."""
+    _install_stub_openai(monkeypatch, lambda kwargs: None)
+    result = OpenAIResolver(max_retries=1).resolve(seeded)
+    assert result is seeded
+    assert result.ingestion_state == "resolving"  # partial, never crashed
+
+
+# ---------------------------------------------------------------------------
+# auto_resolver — environment-driven selection (no network)
+# ---------------------------------------------------------------------------
+
+
+def test_auto_resolver_prefers_anthropic(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    resolver = auto_resolver()
+    assert isinstance(resolver, AnthropicResolver)
+
+
+def test_auto_resolver_falls_back_to_openai(monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    resolver = auto_resolver()
+    assert isinstance(resolver, OpenAIResolver)
+
+
+def test_auto_resolver_falls_back_to_mock_with_warning(monkeypatch, capsys) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    resolver = auto_resolver()
+    assert isinstance(resolver, MockResolver)
+    captured = capsys.readouterr()
+    assert "MockResolver" in captured.err
+    assert "ANTHROPIC_API_KEY" in captured.err
+    assert "OPENAI_API_KEY" in captured.err

@@ -35,7 +35,7 @@ PDF ──(Docling)──▶ Docling JSON ──▶ math document ──▶ onto
 ## Requirements
 
 - Python 3.10+
-- Core runtime is lightweight: `pydantic`, `anthropic` (see `requirements.txt`).
+- Core runtime is lightweight: `pydantic`, `anthropic`, `openai` (see `requirements.txt`).
 - **Optional** heavy extras, installed only when you need them:
   - Live PDF → Docling JSON conversion: `requirements-ingest.txt` (Docling + PyTorch + models).
   - Browser interaction tests: `pip install playwright && playwright install chromium`.
@@ -46,7 +46,7 @@ PDF ──(Docling)──▶ Docling JSON ──▶ math document ──▶ onto
 cd ~/math-ide
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt          # core: pydantic, anthropic
+pip install -r requirements.txt          # core: pydantic, anthropic, openai
 pip install -r requirements-dev.txt       # tests: pytest
 # optional, only for live PDF ingestion (large download):
 # pip install -r requirements-ingest.txt
@@ -81,23 +81,33 @@ With the optional Docling extra installed, point `ingest` at a PDF or URL instea
 
 ```bash
 pip install -r requirements-ingest.txt
-python -m math_ide ingest paper.pdf --formula --wait -o math-doc.json
+python -m math_ide ingest paper.pdf --wait -o math-doc.json
 ```
 
-`--formula` enables Docling formula enrichment (LaTeX); `--ocr` enables OCR for scanned PDFs.
+Docling formula enrichment (LaTeX) is **on by default**; pass `--no-formula` to disable it. `--ocr`
+enables OCR for scanned PDFs.
 
 ### Live LLM meaning resolution
 
-The default resolver is a deterministic mock. To use a real model, install nothing extra (the
-`anthropic` SDK is already a core dependency), set your key, and select the resolver:
+Without `--wait` the document stops at `structure_ready` and no resolver runs. With `--wait` the
+default resolver is `auto`, which reads the environment: `ANTHROPIC_API_KEY` → Anthropic, else
+`OPENAI_API_KEY` → OpenAI, else the deterministic offline mock (with a one-line warning to stderr).
+Both SDKs are already core dependencies, so to use a real model you only set a key:
 
 ```bash
+# auto: picks Anthropic if ANTHROPIC_API_KEY is set, else OpenAI if OPENAI_API_KEY is set, else mock
 export ANTHROPIC_API_KEY=sk-...
-python -m math_ide ingest tests/fixtures/example_docling.json --wait --resolver anthropic -o math-doc.json
+python -m math_ide ingest tests/fixtures/example_docling.json --wait -o math-doc.json
+
+# or pin a provider explicitly
+export OPENAI_API_KEY=sk-...
+python -m math_ide ingest tests/fixtures/example_docling.json --wait --resolver openai -o math-doc.json
 ```
 
-The Anthropic resolver (model `claude-sonnet-4-6` by default) is failure-tolerant: on API/parse errors
-it retries, then returns partial results rather than crashing the pipeline.
+The Anthropic resolver (model `claude-sonnet-4-6` by default) and the OpenAI resolver (model `gpt-4o`
+by default, overridable via `OPENAI_MODEL`) are failure-tolerant: on API/parse errors they retry, then
+return partial results rather than crashing the pipeline. Pinning `--resolver anthropic` or
+`--resolver openai` without the matching key fails fast (exit code 2) before any network call.
 
 ## Pipeline states
 
@@ -116,7 +126,7 @@ reflow path.
 
 | Command | Purpose |
 | --- | --- |
-| `python -m math_ide ingest <source>` | Ingest a Docling `.json` **or** a PDF/URL into a math document. Flags: `-o`, `--document-id`, `--wait`, `--resolver {mock,anthropic}`, `--formula`, `--ocr`. |
+| `python -m math_ide ingest <source>` | Ingest a Docling `.json` **or** a PDF/URL into a math document. Flags: `-o`, `--document-id`, `--wait`, `--resolver {mock,anthropic,openai,auto}` (default `auto` with `--wait`, else `mock`), `--no-formula`, `--ocr`. |
 | `python -m math_ide render <math-doc.json>` | Render a math document JSON to a standalone HTML page (`-o`). |
 | `python -m math_ide serve <math-doc.json>` | Serve the rendered page plus assets over HTTP. |
 | `python pdf_to_docling.py <pdf>` | **Legacy** thin Docling CLI (markdown/JSON/LaTeX export). Superseded by `math_ide ingest` for the math document; kept for raw Docling output. |

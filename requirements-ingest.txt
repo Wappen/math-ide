@@ -1,1 +1,4 @@
-docling>=2.0.0
+# Lower bound, not a hard pin. Umlaut / text-extraction quality (decomposed
+# diaeresis artifacts, see issue #17) must be re-verified on real hardware;
+# this floor was NOT live-tested in the offline dev environment.
+docling>=2.7.0

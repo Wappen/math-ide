@@ -154,18 +154,20 @@ writes a `structure_ready` document:
 # stage 1 only (default) — structure_ready, no LLM
 python -m math_ide ingest tests/fixtures/example_docling.json -o doc.json
 
-# run stage 2 to 'ready' before writing (MockResolver by default)
+# run stage 2 to 'ready' before writing (default resolver under --wait is 'auto')
 python -m math_ide ingest tests/fixtures/example_docling.json --wait
 
-# choose the resolver (anthropic SDK imported lazily; reads ANTHROPIC_API_KEY)
-python -m math_ide ingest tests/fixtures/example_docling.json --wait --resolver anthropic
+# pin a resolver (SDKs imported lazily; anthropic reads ANTHROPIC_API_KEY,
+# openai reads OPENAI_API_KEY)
+python -m math_ide ingest tests/fixtures/example_docling.json --wait --resolver openai
 ```
 
 | Flag | Effect |
 |------|--------|
 | *(none)* | Stage 1 only → `structure_ready` (fast, deterministic, offline). |
 | `--wait` | Also run stage 2 to `ready` before writing output. |
-| `--resolver mock\|anthropic` | Stage-2 resolver used with `--wait` (default `mock`). `anthropic` is constructed lazily, only when actually used. |
+| `--resolver mock\|anthropic\|openai\|auto` | Stage-2 resolver used with `--wait`. The default depends on `--wait`: `auto` when `--wait` is passed, else `mock`. `auto` picks from the environment (`ANTHROPIC_API_KEY` → anthropic, else `OPENAI_API_KEY` → openai, else mock + a stderr warning). `anthropic`/`openai` are constructed lazily and fail fast (exit 2) if their key is missing. |
 
-All pre-existing flags (`-o/--output`, `--document-id`, `--formula`, `--ocr`)
-keep working unchanged.
+All pre-existing flags (`-o/--output`, `--document-id`, `--ocr`) keep working
+unchanged. Docling formula enrichment is **on by default** on the live PDF path;
+pass `--no-formula` to disable it.

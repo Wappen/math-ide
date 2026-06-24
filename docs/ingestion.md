@@ -53,7 +53,7 @@ back to `Paragraph`.
 |------------------|---------------------|-------|
 | `section_header` | `Section`           | Subsequent blocks nest under the most recent section. |
 | `text`           | `Paragraph` **or** a formal block | See formal-block detection below. |
-| `formula`        | `Formula`           | `orig_fallback` set immediately; `latex` only if Docling enrichment ran. |
+| `formula`        | `Formula`           | `orig_fallback` set immediately; `latex` set when Docling enrichment ran (the default on the live PDF path). |
 | (other / unknown)| `Paragraph`         | Conservative fallback. |
 
 Source bboxes and `page_no` come straight from `prov[0]`; for mapped blocks they
@@ -93,8 +93,9 @@ preamble split and will be reused by occurrence placement (#7).
 
 `Formula` blocks always keep Docling's linearized `orig` in `orig_fallback`, so
 occurrences are extractable before LaTeX exists. If a formula node carries LaTeX
-`text` (Docling formula enrichment ran), the block is born `ready`; otherwise
-`pending`.
+`text` (Docling formula enrichment ran — the default on the live PDF path), the
+block is born `ready`; otherwise (e.g. when enrichment was disabled via
+`--no-formula`, or for offline dicts that lack LaTeX) it stays `pending`.
 
 ```python
 from math_ide.ingest.formula import build_formula, upgrade_formula, mark_failed
@@ -124,13 +125,16 @@ things that *denote a mathematical object* become symbols.
 ## CLI
 
 ```
-python -m math_ide ingest <source> [-o OUT] [--document-id ID] [--formula] [--ocr]
+python -m math_ide ingest <source> [-o OUT] [--document-id ID] [--no-formula] [--ocr]
 ```
 
 `<source>` is a `.json` Docling dict (read directly) or a `.pdf`/URL (converted
 live via the lazy Docling runner). Output is the `MathDocument` as pretty JSON
-(`model_dump_json(indent=2)`). The `--formula`/`--ocr` flags only affect the live
-PDF path.
+(`model_dump_json(indent=2)`). These flags only affect the live PDF path; a
+pre-converted Docling dict is read as-is. On the live PDF path **formula
+enrichment is ON by default**, so formulas are born `ready` with LaTeX;
+`--no-formula` disables it (formulas stay `pending` with the `orig` fallback
+only) for faster/debug runs, while `--ocr` remains opt-in.
 
 `python -m math_ide` dispatches `ingest` / `render` / `serve` with **lazy**
 per-subcommand imports, so a subcommand whose module is not yet built never

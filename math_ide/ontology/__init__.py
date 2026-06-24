@@ -15,8 +15,9 @@ deterministic — no LLM — and brings a freshly-ingested document to
 
 Meaning resolution (concept disambiguation, inferred meaning, semantic
 relations) is a separate asynchronous stage (#9), exposed here as the
-:class:`Resolver` protocol with a deterministic :class:`MockResolver` and a
-live :class:`AnthropicResolver`.
+:class:`Resolver` protocol with a deterministic :class:`MockResolver` and the
+live :class:`AnthropicResolver` / :class:`OpenAIResolver`. :func:`auto_resolver`
+picks one from the environment (Anthropic -> OpenAI -> offline mock).
 
 Public entry point: :func:`seed_ontology`.
 """
@@ -25,9 +26,12 @@ from __future__ import annotations
 
 from math_ide.ontology.concepts import seed_concepts_and_relations
 from math_ide.ontology.meaning import (
+    DEFAULT_OPENAI_MODEL,
     AnthropicResolver,
     MockResolver,
+    OpenAIResolver,
     Resolver,
+    auto_resolver,
 )
 from math_ide.ontology.occurrences import extract_occurrences
 from math_ide.schema import MathDocument
@@ -39,6 +43,9 @@ __all__ = [
     "Resolver",
     "MockResolver",
     "AnthropicResolver",
+    "OpenAIResolver",
+    "auto_resolver",
+    "DEFAULT_OPENAI_MODEL",
 ]
 
 

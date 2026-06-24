@@ -35,7 +35,7 @@ PDF ──(Docling)──▶ Docling JSON ──▶ math document ──▶ onto
 ## Requirements
 
 - Python 3.10+
-- Core runtime is lightweight: `pydantic`, `anthropic`, `openai` (see `requirements.txt`).
+- Core runtime is lightweight: `pydantic`, `anthropic`, `openai`, `python-dotenv` (see `requirements.txt`).
 - **Optional** heavy extras, installed only when you need them:
   - Live PDF → Docling JSON conversion: `requirements-ingest.txt` (Docling + PyTorch + models).
   - Browser interaction tests: `pip install playwright && playwright install chromium`.
@@ -92,10 +92,16 @@ enables OCR for scanned PDFs.
 Without `--wait` the document stops at `structure_ready` and no resolver runs. With `--wait` the
 default resolver is `auto`, which reads the environment: `ANTHROPIC_API_KEY` → Anthropic, else
 `OPENAI_API_KEY` → OpenAI, else the deterministic offline mock (with a one-line warning to stderr).
-Both SDKs are already core dependencies, so to use a real model you only set a key:
+Both SDKs are already core dependencies. Set a key via the environment or a
+project ``.env`` file (see below):
 
 ```bash
-# auto: picks Anthropic if ANTHROPIC_API_KEY is set, else OpenAI if OPENAI_API_KEY is set, else mock
+# Option A: project .env (gitignored) — loaded automatically by the CLI
+cp .env.example .env
+# edit .env and add ANTHROPIC_API_KEY=sk-... or OPENAI_API_KEY=sk-...
+python -m math_ide ingest tests/fixtures/example_docling.json --wait -o math-doc.json
+
+# Option B: export in the shell
 export ANTHROPIC_API_KEY=sk-...
 python -m math_ide ingest tests/fixtures/example_docling.json --wait -o math-doc.json
 
@@ -103,6 +109,10 @@ python -m math_ide ingest tests/fixtures/example_docling.json --wait -o math-doc
 export OPENAI_API_KEY=sk-...
 python -m math_ide ingest tests/fixtures/example_docling.json --wait --resolver openai -o math-doc.json
 ```
+
+With ``--wait``, ``auto`` picks Anthropic if ``ANTHROPIC_API_KEY`` is set, else
+OpenAI if ``OPENAI_API_KEY`` is set, else the offline mock. Shell exports take
+precedence over ``.env`` when both define the same variable.
 
 The Anthropic resolver (model `claude-sonnet-4-6` by default) and the OpenAI resolver (model `gpt-4o`
 by default, overridable via `OPENAI_MODEL`) are failure-tolerant: on API/parse errors they retry, then

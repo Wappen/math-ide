@@ -165,6 +165,10 @@ def run(argv: list[str]) -> int:
     the ``--resolver``-selected one, defaulting to ``auto`` under ``--wait`` and
     ``mock`` otherwise (see :func:`_effective_resolver_name`).
     """
+    from math_ide.env import load_env
+
+    load_env()
+
     args = build_parser().parse_args(argv)
 
     # Lazy import keeps the dispatcher cheap and avoids a cycle at module load.

@@ -21,9 +21,12 @@ from pathlib import Path
 
 import pytest
 
+from math_ide.env import load_env
 from math_ide.ontology import MockResolver
 from math_ide.pipeline import ingest_structure, run_full
 from math_ide.schema import MathDocument
+
+load_env()
 
 FIXTURE = Path(__file__).parent / "fixtures" / "example_docling.json"
 

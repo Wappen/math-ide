@@ -77,9 +77,17 @@ The whole module is **skipped unless both** of these hold (and the `anthropic`
 SDK is importable):
 
 * `RUN_LLM_TESTS=1` — explicit opt-in (absent in CI);
-* `ANTHROPIC_API_KEY` — present in the environment.
+* `ANTHROPIC_API_KEY` — present in the environment (or in a project `.env` file,
+  which pytest loads via `conftest.py`).
 
 Run locally with:
+
+```bash
+cp .env.example .env   # add ANTHROPIC_API_KEY=sk-...
+RUN_LLM_TESTS=1 .venv/bin/python -m pytest -q tests/test_acceptance_llm.py
+```
+
+Or export the key in the shell:
 
 ```bash
 RUN_LLM_TESTS=1 ANTHROPIC_API_KEY=sk-... \

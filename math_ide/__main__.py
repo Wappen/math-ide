@@ -26,6 +26,10 @@ def _resolve(target: str) -> Callable[[list[str]], int]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from math_ide.env import load_env
+
+    load_env()
+
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] in ("-h", "--help"):
         _print_usage()

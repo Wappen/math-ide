@@ -75,9 +75,10 @@ def source_provenance(docling: dict[str, Any]) -> SourceProvenance:
     (which we still preserve verbatim).
     """
     origin = docling.get("origin") or {}
+    raw_hash = origin.get("binary_hash")
     return SourceProvenance(
         origin="docling_json",
-        binary_hash=origin.get("binary_hash"),
+        binary_hash=None if raw_hash is None else str(raw_hash),
         filename=origin.get("filename"),
         mimetype=origin.get("mimetype"),
     )

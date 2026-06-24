@@ -46,6 +46,13 @@ def test_source_provenance_marks_docling_json(docling):
     assert prov.binary_hash.startswith("0123456789")
 
 
+def test_source_provenance_coerces_integer_binary_hash():
+    prov = source_provenance(
+        {"origin": {"binary_hash": 11714210736799704244, "mimetype": "application/pdf"}}
+    )
+    assert prov.binary_hash == "11714210736799704244"
+
+
 def test_default_document_id_from_name(docling):
     doc = build_math_document(docling)
     assert doc.document_id == "analysis-skript"

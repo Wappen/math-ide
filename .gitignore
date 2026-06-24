@@ -9,3 +9,17 @@ build/
 .pytest_cache/
 .mypy_cache/
 output/
+
+# Pipeline / CLI artifacts
+math-doc.json
+math-ide.html
+*-math.json
+
+# pdf_to_docling.py outputs (repo root)
+output.json
+output.md
+output.pdf
+output.tex
+
+# Local sample PDFs (fixtures live under tests/fixtures/)
+example.pdf

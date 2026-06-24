@@ -1,0 +1,384 @@
+/* Math IDE — rendered-document styles.
+ *
+ * Styles the DOM contract emitted by math_ide.renderer.render. Class names and
+ * data-attributes are documented at the top of render.py; keep them in sync.
+ */
+
+:root {
+  --bg: #fbfbfd;
+  --fg: #1d1d1f;
+  --muted: #6b7280;
+  --rule: #e5e7eb;
+  --accent: #2563eb;
+  --occ-bg: #fff4cc;
+  --occ-bg-hover: #ffe58a;
+  --fallback-bg: #f3f4f6;
+  --fallback-fg: #8a3b00;
+  --max-width: 46rem;
+
+  /* per-type accent colours for formal blocks */
+  --definition: #2563eb;
+  --theorem: #7c3aed;
+  --lemma: #0891b2;
+  --corollary: #0d9488;
+  --proof: #6b7280;
+  --example: #d97706;
+  --remark: #db2777;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+/* Scroll container: the navigation root for go-to-definition. */
+.math-doc-scroll {
+  display: block;
+  height: 100%;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.math-doc {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 6rem;
+}
+
+/* Sections ---------------------------------------------------------------- */
+
+.section {
+  margin: 2rem 0;
+}
+
+.section-title {
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 1.5rem 0 0.75rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* Paragraphs -------------------------------------------------------------- */
+
+.paragraph {
+  margin: 0.75rem 0;
+}
+
+/* Formal blocks ----------------------------------------------------------- */
+
+.formal {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--muted);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.formal-header {
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+
+.formal-preamble {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.formal-body {
+  margin: 0;
+}
+
+/* Distinct accents per formal-block type. */
+.formal.definition { border-left-color: var(--definition); }
+.formal.definition .formal-header { color: var(--definition); }
+.formal.theorem    { border-left-color: var(--theorem); }
+.formal.theorem .formal-header { color: var(--theorem); }
+.formal.lemma      { border-left-color: var(--lemma); }
+.formal.lemma .formal-header { color: var(--lemma); }
+.formal.corollary  { border-left-color: var(--corollary); }
+.formal.corollary .formal-header { color: var(--corollary); }
+.formal.proof      { border-left-color: var(--proof); background: #fafafa; }
+.formal.proof .formal-header { color: var(--proof); }
+.formal.example    { border-left-color: var(--example); }
+.formal.example .formal-header { color: var(--example); }
+.formal.remark     { border-left-color: var(--remark); }
+.formal.remark .formal-header { color: var(--remark); }
+
+/* Formulas ---------------------------------------------------------------- */
+
+.formula {
+  margin: 1rem 0;
+  padding: 0.6rem 0.75rem;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.katex-target {
+  display: inline-block;
+}
+
+/* Inline-anchored linearized text shown until/unless KaTeX glyphs are matched
+ * (the ready-formula DOM contract — see render.py). It carries the per-symbol
+ * .occ hit targets as a no-JS / no-KaTeX fallback; app.js hides it (or the
+ * individual matched anchors) once it tags the rendered KaTeX glyphs. When the
+ * KaTeX host has rendered, dim the still-visible fallback so it reads as a
+ * secondary affordance rather than a duplicate of the typeset math. */
+.occ-fallback {
+  display: inline-block;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.95em;
+}
+.katex-target[data-katex-rendered="1"] + .occ-fallback {
+  margin-left: 0.5rem;
+  opacity: 0.75;
+}
+.occ-fallback[hidden],
+.occ[hidden] {
+  display: none;
+}
+
+/* A KaTeX glyph promoted to an .occ hit target: keep it tight to the glyph so
+ * the symbol target stays measurably smaller than the whole-formula box. */
+.katex .occ {
+  padding: 0;
+}
+
+/* Degraded display when LaTeX enrichment is not ready. */
+.formula-fallback {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border: 1px dashed #d1b48c;
+  border-radius: 4px;
+  background: var(--fallback-bg);
+  color: var(--fallback-fg);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.95em;
+}
+.formula[data-enrichment="failed"] .formula-fallback {
+  border-color: #ef4444;
+  color: #b91c1c;
+}
+
+/* Occurrence hit targets -------------------------------------------------- */
+
+.occ {
+  background: var(--occ-bg);
+  border-radius: 3px;
+  padding: 0 1px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.occ:hover,
+.occ:focus {
+  background: var(--occ-bg-hover);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.occ[data-kind="citation"] {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+/* "Resolving…" state: no go-to-definition target yet (#12). The anchor is
+ * still focusable (right-click still opens its partial concept card) but
+ * left-click is a no-op with a dimmed, wait-cursor affordance. */
+.occ[data-resolvable="false"] {
+  background: transparent;
+  color: var(--muted);
+  cursor: progress;
+  border-bottom: 1px dashed var(--muted);
+}
+.occ[data-resolvable="false"]:hover,
+.occ[data-resolvable="false"]:focus {
+  background: var(--fallback-bg);
+  outline: 2px dashed var(--muted);
+}
+.occ[data-resolvable="false"]::after {
+  content: "";
+}
+/* Brief shake/flash when a disabled occurrence is clicked. */
+@keyframes occ-resolving-flash {
+  0%, 100% { background: var(--fallback-bg); }
+  50% { background: #ffe1b3; }
+}
+.occ.occ-resolving-flash {
+  animation: occ-resolving-flash 0.4s ease 2;
+}
+
+/* Go-to-definition highlight ring (#12) ----------------------------------- */
+
+@keyframes definition-pulse {
+  0% { box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.55); }
+  100% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
+}
+.definition-highlight {
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.55);
+  animation: definition-pulse 1.2s ease-out 1;
+  scroll-margin: 30vh;
+}
+
+/* Concept card side panel (#13) ------------------------------------------- */
+
+.concept-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(24rem, 90vw);
+  height: 100%;
+  overflow-y: auto;
+  background: #ffffff;
+  border-left: 1px solid var(--rule);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+  padding: 1.25rem 1.25rem 3rem;
+  z-index: 50;
+}
+.concept-panel[hidden] { display: none; }
+
+.card-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.8rem;
+  border: none;
+  background: transparent;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}
+.card-close:hover { color: var(--fg); }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.2rem 0 1rem;
+  flex-wrap: wrap;
+}
+.card-title {
+  font-size: 1.25rem;
+  margin: 0;
+}
+.card-status {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+}
+.card-status.status-resolved {
+  background: #dcfce7;
+  color: #166534;
+}
+.card-status.status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.card-section { margin: 0 0 1rem; }
+.card-section-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0 0 0.35rem;
+}
+.card-subhead {
+  font-size: 0.75rem;
+  margin: 0.6rem 0 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.card-subhead.structural { color: var(--accent); }
+.card-subhead.semantic { color: var(--remark); }
+
+.card-meaning { margin: 0; }
+.card-formal .card-meaning {
+  border-left: 3px solid var(--definition);
+  padding-left: 0.6rem;
+}
+.card-inferred .card-meaning {
+  border-left: 3px solid var(--remark);
+  padding-left: 0.6rem;
+  font-style: italic;
+}
+
+.card-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.card-badge.inferred {
+  background: #fce7f3;
+  color: var(--remark);
+}
+
+.card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.card-ref,
+.card-neighbour {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.card-ref-link,
+.card-neighbour-link {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0.1rem 0;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.card-ref-link:hover,
+.card-neighbour-link:hover { color: #1e40af; }
+
+/* Structural vs semantic neighbourhood entries are visually distinct. */
+.card-neighbour.structural {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.5rem;
+}
+.card-neighbour.semantic {
+  border-left: 3px solid var(--remark);
+  padding-left: 0.5rem;
+}
+.card-kind {
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-variant: small-caps;
+  min-width: 5.5rem;
+}
+.card-empty {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.9rem;
+}

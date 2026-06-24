@@ -1,123 +1,167 @@
-# math-ide
+# Math IDE
 
-Convert PDF documents to structured text using [Docling](https://github.com/docling-project/docling). The CLI accepts a local file path, a URL, or raw PDF bytes from stdin and exports markdown, JSON, or LaTeX.
+A system that ingests mathematical PDFs and makes their content **navigable**: users explore a
+rebuilt, structured view of the document — clicking symbols, formulas, and defined concepts to jump
+between definitions and the places those concepts are used.
+
+The domain language lives in [`CONTEXT.md`](CONTEXT.md); the hard-to-reverse design decisions are
+recorded as ADRs in [`docs/adr/`](docs/adr/).
+
+## What it does
+
+Ingestion runs in **stages** so the document is usable before the slow parts finish:
+
+```
+PDF ──(Docling)──▶ Docling JSON ──▶ math document ──▶ ontology ──▶ rendered IDE
+                                    (blocks)          (occurrences/         (HTML + KaTeX,
+                                                       concepts/relations)    click navigation)
+   └─────────── stage 1: structure + occurrences + concept seeds (synchronous, fast) ───────────┘
+                          └──── stage 2: LLM meaning resolution (async) ────┘
+```
+
+- **Ingestion** turns a Docling document into a canonical **math document**: a tree of typed blocks
+  (`Section`, `Paragraph`, `Definition`, `Theorem`, `Lemma`, …, `Formula`). Formal environments are
+  detected from text (with preamble splitting); formulas keep a linearized `orig` fallback immediately
+  and upgrade to LaTeX in place when enrichment completes; each formula carries a **symbol index**.
+- **Ontology** indexes the document: **occurrences** (every surface appearance of notation, with dual
+  *source*/*render* bounding boxes), **concepts** (the mathematical objects notation denotes, seeded
+  from formal blocks), and **relations** (deterministic structural edges plus LLM-inferred semantic
+  edges). **Meaning resolution** runs an LLM asynchronously to assign symbols to concepts and infer
+  meaning — but **formal meaning is authoritative and never overridden**.
+- **Renderer + IDE** rebuilds the document as interactive HTML (KaTeX for formulas), with **left-click
+  go-to-definition** and **right-click concept cards**. Navigation logic is precomputed in Python so it
+  is testable without a browser; the JavaScript layer is thin.
 
 ## Requirements
 
 - Python 3.10+
-- Enough disk space for Docling and its model dependencies (PyTorch, layout models, etc.)
+- Core runtime is lightweight: `pydantic`, `anthropic` (see `requirements.txt`).
+- **Optional** heavy extras, installed only when you need them:
+  - Live PDF → Docling JSON conversion: `requirements-ingest.txt` (Docling + PyTorch + models).
+  - Browser interaction tests: `pip install playwright && playwright install chromium`.
 
 ## Setup
 
 ```bash
-cd ~/Projects/math-ide
+cd ~/math-ide
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt          # core: pydantic, anthropic
+pip install -r requirements-dev.txt       # tests: pytest
+# optional, only for live PDF ingestion (large download):
+# pip install -r requirements-ingest.txt
 ```
 
-The first conversion downloads layout models from Hugging Face. That one-time step can take several minutes; later runs are much faster.
+## Quickstart (offline, no GPU, no API key)
 
-## Usage
-
-### Local PDF
+The repo ships a synthetic Docling-JSON fixture (`tests/fixtures/example_docling.json`) so you can run
+the whole loop without converting a PDF.
 
 ```bash
-python pdf_to_docling.py document.pdf
+# Stage 1 only — fast, returns at 'structure_ready' (citations + formal navigation already work)
+python -m math_ide ingest tests/fixtures/example_docling.json --document-id demo -o math-doc.json
+
+# Full pipeline — runs stage 2 (meaning resolution) to 'ready' using the deterministic mock resolver
+python -m math_ide ingest tests/fixtures/example_docling.json --document-id demo --wait -o math-doc.json
+
+# Render the math document to a standalone interactive HTML page
+python -m math_ide render math-doc.json -o math-ide.html
+
+# Or serve it (math document + assets) over HTTP
+python -m math_ide serve math-doc.json
 ```
 
-### URL
+Open `math-ide.html` in a browser: formulas render with KaTeX, **left-click** an identifier or citation
+to go to its definition, **right-click** to open its concept card. Symbols not yet linked by meaning
+resolution show a "resolving…" state.
+
+### Live PDF ingestion
+
+With the optional Docling extra installed, point `ingest` at a PDF or URL instead of a JSON file:
 
 ```bash
-python pdf_to_docling.py https://arxiv.org/pdf/2408.09869
+pip install -r requirements-ingest.txt
+python -m math_ide ingest paper.pdf --formula --wait -o math-doc.json
 ```
 
-### Stdin pipe
+`--formula` enables Docling formula enrichment (LaTeX); `--ocr` enables OCR for scanned PDFs.
+
+### Live LLM meaning resolution
+
+The default resolver is a deterministic mock. To use a real model, install nothing extra (the
+`anthropic` SDK is already a core dependency), set your key, and select the resolver:
 
 ```bash
-cat document.pdf | python pdf_to_docling.py
-curl -fsSL https://example.com/doc.pdf | python pdf_to_docling.py
+export ANTHROPIC_API_KEY=sk-...
+python -m math_ide ingest tests/fixtures/example_docling.json --wait --resolver anthropic -o math-doc.json
 ```
 
-### Write to a file
+The Anthropic resolver (model `claude-sonnet-4-6` by default) is failure-tolerant: on API/parse errors
+it retries, then returns partial results rather than crashing the pipeline.
 
-```bash
-python pdf_to_docling.py document.pdf -o output.md
-```
+## Pipeline states
 
-### Export JSON
+`ingesting → structure_ready → resolving → ready`
 
-```bash
-python pdf_to_docling.py document.pdf --format json -o output.json
-```
+- **structure_ready** — blocks, occurrences, concept seeds, and all *structural* relations exist;
+  citation and formal-block navigation work. The IDE can open the document here.
+- **resolving / ready** — meaning resolution links symbols to concepts and adds *semantic* relations.
+  Each mutation bumps a monotonic `version`/`etag` so a live renderer can refresh only what changed.
+  `resolving` is also the terminal state when stage 2 fails (stage-1 results are preserved).
 
-### Export LaTeX
+See [`docs/pipeline.md`](docs/pipeline.md) for the orchestration API and the in-place formula-upgrade
+reflow path.
 
-```bash
-python pdf_to_docling.py document.pdf --format latex -o output.tex
-```
+## CLI reference
 
-For math-heavy PDFs, enable formula recognition so equations are emitted as LaTeX instead of placeholders:
-
-```bash
-python pdf_to_docling.py document.pdf --format latex --formula -o output.tex
-```
-
-The LaTeX output is a complete `.tex` file (preamble plus `\begin{document}` … `\end{document}`). Compile it with an external tool such as `pdflatex` or `tectonic`.
-
-### Scanned PDFs (OCR)
-
-OCR is disabled by default for faster processing of text-based PDFs. Enable it for scanned or image-only documents:
-
-```bash
-python pdf_to_docling.py scan.pdf --ocr
-```
-
-## Options
-
-| Option | Description |
+| Command | Purpose |
 | --- | --- |
-| `pdf` | Optional path or URL to a PDF. Omit when piping bytes on stdin. |
-| `-o`, `--output` | Write output to a file instead of stdout. |
-| `--format` | `markdown` (default), `json`, or `latex`. |
-| `--ocr` | Enable OCR for scanned/image PDFs. |
-| `--formula` | Recognize formulas and convert them to LaTeX (slower). |
-
-## Examples
-
-```bash
-# Markdown to stdout
-python pdf_to_docling.py example.pdf
-
-# JSON to a file
-python pdf_to_docling.py example.pdf --format json -o result.json
-
-# LaTeX with formula recognition
-python pdf_to_docling.py example.pdf --format latex --formula -o result.tex
-
-# Pipe into another tool
-python pdf_to_docling.py paper.pdf | less
-```
+| `python -m math_ide ingest <source>` | Ingest a Docling `.json` **or** a PDF/URL into a math document. Flags: `-o`, `--document-id`, `--wait`, `--resolver {mock,anthropic}`, `--formula`, `--ocr`. |
+| `python -m math_ide render <math-doc.json>` | Render a math document JSON to a standalone HTML page (`-o`). |
+| `python -m math_ide serve <math-doc.json>` | Serve the rendered page plus assets over HTTP. |
+| `python pdf_to_docling.py <pdf>` | **Legacy** thin Docling CLI (markdown/JSON/LaTeX export). Superseded by `math_ide ingest` for the math document; kept for raw Docling output. |
 
 ## Project layout
 
 ```
-math-ide/
-├── pdf_to_docling.py   # CLI entry point
-├── requirements.txt
-├── .gitignore
-└── README.md
+math_ide/
+├── schema.py            # canonical math-document schema (Pydantic v2) — source of truth
+├── ingest/              # Docling JSON → block tree: formal-block detection, formulas, symbol index
+├── ontology/            # occurrences, concept seeding + structural relations, LLM meaning resolution
+├── renderer/            # math document → interactive HTML; navigation precompute; app.js / styles.css
+├── pipeline.py          # staged ingestion orchestration (state machine, versioning, formula upgrade)
+└── __main__.py          # `python -m math_ide` subcommand dispatcher
+tests/                   # offline suite (default), gated browser + LLM suites; fixtures/
+docs/                    # adr/, math-document-schema.md, ingestion/ontology/renderer/ide/pipeline.md
+pdf_to_docling.py        # legacy Docling CLI
 ```
 
-Generated artifacts (`.venv/`, `output/`, conversion results) are gitignored.
+## Testing
 
-## Notes
+```bash
+# Default offline suite — no GPU, no network, no browser
+.venv/bin/python -m pytest -q
 
-- **Text PDFs:** leave OCR off for best speed on documents with an embedded text layer.
-- **Scanned PDFs:** pass `--ocr`. OCR is slower and may require additional runtime dependencies depending on your Docling/OCR engine configuration.
-- **Formulas:** pass `--formula` to decode equations to LaTeX (in markdown as `$...$` / `$$...$$`, in LaTeX export as math environments). Without it, formulas appear as placeholders.
-- **URLs:** the argument must start with `http://` or `https://`.
+# Browser interaction tests (render bboxes + clicks): install Playwright first
+pip install playwright && playwright install chromium && .venv/bin/python -m pytest -q tests/test_ide_browser.py
+
+# Live LLM resolution tests (skipped by default)
+RUN_LLM_TESTS=1 ANTHROPIC_API_KEY=sk-... .venv/bin/python -m pytest -q tests/test_acceptance_llm.py
+```
+
+The browser and LLM suites skip cleanly when their dependencies/credentials are absent. See
+[`tests/README.md`](tests/README.md) for details and the offline-fixture-vs-PDF rationale.
+
+## Documentation
+
+- [`CONTEXT.md`](CONTEXT.md) — domain glossary (the project's shared language).
+- [`docs/adr/`](docs/adr/) — architecture decision records.
+- [`docs/math-document-schema.md`](docs/math-document-schema.md) — block types and indices.
+- [`docs/ingestion.md`](docs/ingestion.md), [`docs/ontology.md`](docs/ontology.md),
+  [`docs/renderer.md`](docs/renderer.md), [`docs/ide.md`](docs/ide.md),
+  [`docs/pipeline.md`](docs/pipeline.md) — per-stage design docs.
 
 ## License
 
-Docling is MIT-licensed. See the [Docling repository](https://github.com/docling-project/docling) for details.
+Docling is MIT-licensed. See the [Docling repository](https://github.com/docling-project/docling) for
+details.

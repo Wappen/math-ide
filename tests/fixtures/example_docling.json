@@ -1,0 +1,132 @@
+{
+  "schema_name": "DoclingDocument",
+  "version": "1.0.0",
+  "name": "analysis_skript",
+  "origin": {
+    "mimetype": "application/pdf",
+    "binary_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "filename": "analysis_skript.pdf"
+  },
+  "body": {
+    "self_ref": "#/body",
+    "children": [
+      { "$ref": "#/texts/0" },
+      { "$ref": "#/texts/1" },
+      { "$ref": "#/texts/2" },
+      { "$ref": "#/texts/3" },
+      { "$ref": "#/texts/4" },
+      { "$ref": "#/texts/5" },
+      { "$ref": "#/texts/6" },
+      { "$ref": "#/texts/7" }
+    ]
+  },
+  "groups": [],
+  "texts": [
+    {
+      "self_ref": "#/texts/0",
+      "label": "section_header",
+      "level": 1,
+      "text": "1 Mengen und Abbildungen",
+      "orig": "1 Mengen und Abbildungen",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": { "l": 72.0, "t": 760.0, "r": 320.0, "b": 742.0, "coord_origin": "BOTTOMLEFT" },
+          "charspan": [0, 24]
+        }
+      ]
+    },
+    {
+      "self_ref": "#/texts/1",
+      "label": "text",
+      "text": "Definition 1.1 (Menge): Eine Menge ist eine Zusammenfassung wohlunterschiedener Objekte unseres Denkens zu einem Ganzen. Die Objekte heissen Elemente der Menge.",
+      "orig": "Definition 1.1 (Menge): Eine Menge ist eine Zusammenfassung wohlunterschiedener Objekte unseres Denkens zu einem Ganzen. Die Objekte heissen Elemente der Menge.",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": { "l": 72.0, "t": 720.0, "r": 523.0, "b": 686.0, "coord_origin": "BOTTOMLEFT" },
+          "charspan": [0, 157]
+        }
+      ]
+    },
+    {
+      "self_ref": "#/texts/2",
+      "label": "text",
+      "text": "Nach Definition 1.1 ist eine Menge durch ihre Elemente vollstaendig bestimmt.",
+      "orig": "Nach Definition 1.1 ist eine Menge durch ihre Elemente vollstaendig bestimmt.",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": { "l": 72.0, "t": 664.0, "r": 523.0, "b": 648.0, "coord_origin": "BOTTOMLEFT" },
+          "charspan": [0, 76]
+        }
+      ]
+    },
+    {
+      "self_ref": "#/texts/3",
+      "label": "text",
+      "text": "Ein wichtiges Konzept der Analysis ist die Injektivitaet. Definition 1.2 (Injektivitaet): Eine Abbildung f: X -> Y heisst injektiv, wenn verschiedene Argumente stets verschiedene Werte besitzen.",
+      "orig": "Ein wichtiges Konzept der Analysis ist die Injektivitaet. Definition 1.2 (Injektivitaet): Eine Abbildung f: X -> Y heisst injektiv, wenn verschiedene Argumente stets verschiedene Werte besitzen.",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": { "l": 72.0, "t": 626.0, "r": 523.0, "b": 580.0, "coord_origin": "BOTTOMLEFT" },
+          "charspan": [0, 190]
+        }
+      ]
+    },
+    {
+      "self_ref": "#/texts/4",
+      "label": "formula",
+      "text": "",
+      "orig": "∀ x₁, x₂ ∈ X : f(x₁) = f(x₂) ⇒ x₁ = x₂",
+      "prov": [
+        {
+          "page_no": 1,
+          "bbox": { "l": 150.0, "t": 558.0, "r": 445.0, "b": 540.0, "coord_origin": "BOTTOMLEFT" },
+          "charspan": [0, 38]
+        }
+      ]
+    },
+    {
+      "self_ref": "#/texts/5",
+      "label": "section_header",
+      "level": 1,
+      "text": "2 Folgen und Konvergenz",
+      "orig": "2 Folgen und Konvergenz",
+      "prov": [
+        {
+          "page_no": 2,
+          "bbox": { "l": 72.0, "t": 760.0, "r": 310.0, "b": 742.0, "coord_origin": "BOTTOMLEFT" },
+          "charspan": [0, 23]
+        }
+      ]
+    },
+    {
+      "self_ref": "#/texts/6",
+      "label": "text",
+      "text": "Definition 2.1 (Konvergenz): Eine Folge a_n konvergiert gegen den Grenzwert L, wenn sie sich diesem Wert beliebig weit annaehert.",
+      "orig": "Definition 2.1 (Konvergenz): Eine Folge a_n konvergiert gegen den Grenzwert L, wenn sie sich diesem Wert beliebig weit annaehert.",
+      "prov": [
+        {
+          "page_no": 2,
+          "bbox": { "l": 72.0, "t": 720.0, "r": 523.0, "b": 696.0, "coord_origin": "BOTTOMLEFT" },
+          "charspan": [0, 127]
+        }
+      ]
+    },
+    {
+      "self_ref": "#/texts/7",
+      "label": "formula",
+      "text": "",
+      "orig": "∀ ε > 0 ∃ N ∈ ℝ ∀ n ≥ N : |a_n − L| < ε",
+      "prov": [
+        {
+          "page_no": 2,
+          "bbox": { "l": 150.0, "t": 674.0, "r": 460.0, "b": 656.0, "coord_origin": "BOTTOMLEFT" },
+          "charspan": [0, 37]
+        }
+      ]
+    }
+  ]
+}

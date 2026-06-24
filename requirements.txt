@@ -1,1 +1,2 @@
-docling>=2.0.0
+pydantic>=2
+anthropic>=0.39

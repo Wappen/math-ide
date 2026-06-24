@@ -12,6 +12,7 @@ from pathlib import Path
 from docling.datamodel.base_models import ConversionStatus, DocumentStream, InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling_core.transforms.serializer.latex import LaTeXDocSerializer, LaTeXParams
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--format",
-        choices=("markdown", "json"),
+        choices=("markdown", "json", "latex"),
         default="markdown",
         help="Export format (default: markdown).",
     )
@@ -40,14 +41,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable OCR for scanned/image PDFs (slower; off by default).",
     )
+    parser.add_argument(
+        "--formula",
+        action="store_true",
+        help=(
+            "Recognize formulas and convert them to LaTeX (slower; "
+            "recommended for math PDFs, especially with --format latex)."
+        ),
+    )
     return parser
 
 
-def build_converter(use_ocr: bool) -> DocumentConverter:
+def build_converter(use_ocr: bool, enrich_formulas: bool) -> DocumentConverter:
     return DocumentConverter(
         format_options={
             InputFormat.PDF: PdfFormatOption(
-                pipeline_options=PdfPipelineOptions(do_ocr=use_ocr),
+                pipeline_options=PdfPipelineOptions(
+                    do_ocr=use_ocr,
+                    do_formula_enrichment=enrich_formulas,
+                ),
             ),
         },
     )
@@ -78,6 +90,18 @@ def read_pdf_source(pdf: str | None) -> Path | str | DocumentStream:
 def export_document(document, fmt: str) -> str:
     if fmt == "json":
         return json.dumps(document.export_to_dict(), indent=2)
+    if fmt == "latex":
+        serializer = LaTeXDocSerializer(
+            doc=document,
+            params=LaTeXParams(
+                packages=[
+                    *LaTeXParams().packages,
+                    r"\usepackage{amsmath}        % display math",
+                    r"\usepackage{amssymb}        % math symbols",
+                ],
+            ),
+        )
+        return serializer.serialize().text
     return document.export_to_markdown()
 
 
@@ -85,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     source = read_pdf_source(args.pdf)
 
-    converter = build_converter(args.ocr)
+    converter = build_converter(args.ocr, args.formula)
     result = converter.convert(source)
 
     if result.status != ConversionStatus.SUCCESS:

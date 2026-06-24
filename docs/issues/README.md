@@ -35,3 +35,7 @@ The script creates labels (if missing) and opens issues in dependency order. To 
 | 13 | Right click: concept card with neighbourhood | `ide` | 9, 12 |
 | 14 | Staged ingestion orchestration | `ingestion` | 8, 9 |
 | 15 | End-to-end acceptance tests (example PDF) | `testing` | 13, 14 |
+| 16 | Default formula enrichment on for live PDF ingest | `ingestion` | 5 |
+| 17 | Bump Docling and verify German umlaut text quality | `ingestion` | 3 |
+| 18 | Adapter normalize decomposed umlauts (fallback) | `ingestion` | 17 |
+| 19 | OpenAI resolver and auto LLM provider selection | `ontology`, `llm` | 9 |
